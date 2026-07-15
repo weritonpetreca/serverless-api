@@ -1,0 +1,64 @@
+# ==========================================
+# Gradle & Java Build Outputs
+# ==========================================
+.gradle/
+build/
+out/
+bin/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ==========================================
+# AWS CDK (Cloud Development Kit) - CRUCIAL
+# ==========================================
+cdk.out/
+.cdk.staging/
+.serverless/
+
+# ==========================================
+# Python Lambda Caches & Virtual Environments
+# ==========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ==========================================
+# IDEs & Text Editors Configuration
+# ==========================================
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+!**/src/main/**/out/
+!**/src/test/**/out/
+
+# VS Code
+.vscode/
+
+# Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# ==========================================
+# OS Generated Files
+# ==========================================
+.DS_Store
+Thumbs.db

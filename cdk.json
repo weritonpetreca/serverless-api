@@ -1,0 +1,6 @@
+{
+  "app": "./gradlew -q run",
+  "context": {
+    "@aws-cdk/core:boostrapQualifier": "hnb659fds"
+  }
+}

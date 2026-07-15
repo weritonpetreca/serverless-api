@@ -1,0 +1,11 @@
+[versions]
+awsCdk = "2.135.0"
+constructs = "10.3.0"
+junit = "6.0.3"
+
+[libraries]
+aws-cdk-lib = { group = "software.amazon.awscdk", name = "aws-cdk-lib", version.ref = "awsCdk" }
+constructs = { group = "software.constructs", name = "constructs", version.ref = "constructs" }
+junit-bom = { group = "org.junit", name = "junit-bom", version.ref = "junit" }
+junit-jupiter = { group = "org.junit.jupiter", name = "junit-jupiter" }
+junit-platform-launcher = { group = "org.junit.platform", name = "junit-platform-launcher" }
