@@ -25,23 +25,7 @@ No entanto, o design tradicional dessa API enfrenta desafios críticos de engenh
 ## 03. Solução
 A arquitetura serverless foi construída utilizando o **AWS CDK v2** em **Java 21**, mapeando os seguintes recursos e integrações:
 
-```text
-                    [ REQUISIÇÃO DO CLIENTE (Navegador/App) ]
-                                        │
-                                        ▼
-                            ┌───────────────────────┐
-                            │  Amazon API Gateway   │
-                            │     (ProductsAPI)     │
-                            └───────────┬───────────┘
-                                        │
-                ┌───────────────────────┴───────────────────────┐
-                │                                               │
-                ▼ (GET /products)                               ▼ (GET /products/{id})
-    ┌───────────────────────┐                       ┌───────────────────────┐
-    │     Lambda Func       │                       │     Lambda Func       │
-    │   (QueryProducts)     │                       │     (GetProduct)      │
-    └───────────────────────┘                       └───────────────────────┘
-```
+![AWS Serverless Product API Architecture](./architecture.png)
 
 1.  **Amazon API Gateway (REST API):**
     *   **Recurso `/products`:** Mapeado ao método `GET` integrado via *Lambda Proxy Integration* à função de consulta geral.
