@@ -68,7 +68,7 @@ O ambiente de persistência local foi provisionado e validado com absoluto suces
 
     **1. Inserir um Produto Válido (POST - HTTP 201 Created):**
     ```bash
-    curl -k -X POST [https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products](https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products) \
+    curl -k -X POST https://<ID_GATEWAY>.execute-api.localhost.localstack.cloud:4566/prod/products \
          -H "Content-Type: application/json" \
          -d '{
            "title": "Elixir de Gato",
@@ -83,7 +83,7 @@ O ambiente de persistência local foi provisionado e validado com absoluto suces
 
     **2. Buscar o Produto Cadastrado por ID (GET - HTTP 200 OK):**
     ```bash
-    curl -k -X GET [https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products/e3368f9c-7065-46f6-8ea4-3438f1d43115](https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products/e3368f9c-7065-46f6-8ea4-3438f1d43115)
+    curl -k -X GET https://<ID_GATEWAY>.execute-api.localhost.localstack.cloud:4566/prod/products/<ID_PRODUTO>
     
     # Retorno obtido com sucesso:
     # {"description": "Permite enxergar no escuro completo.", "id": "e3368f9c-7065-46f6-8ea4-3438f1d43115", "title": "Elixir de Gato", "category": "Home", "price": 120}
@@ -91,7 +91,7 @@ O ambiente de persistência local foi provisionado e validado com absoluto suces
 
     **3. Atualizar Parcialmente o Produto (PATCH - HTTP 200 OK):**
     ```bash
-    curl -k -X PATCH [https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products/e3368f9c-7065-46f6-8ea4-3438f1d43115](https://ji2podacim.execute-api.localhost.localstack.cloud:4566/prod/products/e3368f9c-7065-46f6-8ea4-3438f1d43115) \
+    curl -k -X PATCH https://<ID_GATEWAY>.execute-api.localhost.localstack.cloud:4566/prod/products/<ID_PRODUTO> \
          -H "Content-Type: application/json" \
          -d '{
            "price": 150.00,
