@@ -1,32 +1,44 @@
 import json
+import logging
+from products_db import ProductsRepository
+from response_utils import create_success_response, create_error_response
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+repository = ProductsRepository()
 
 def handler(event, context):
-    products = {
-        "prod_001": {"id": "prod_001", "name": "Laptop Gamer", "price": 4500.00, "category": "Electronics"},
-        "prod_002": {"id": "prod_002", "name": "Teclado Mecânico", "price": 350.00, "category": "Electronics"},
-        "prod_003": {"id": "prod_003", "name": "Caneca Dev", "price": 45.00, "category": "Office"}
-    }
+    """
+    Handler da AWS Lambda responsável por buscar um único produto por ID.
 
-    path_parameters = event.get('pathParameters') or {}
-    product_id = path_parameters.get('id')
+    Fluxo:
+      1. Extrai o ID dos parâmetros de rota (pathParameters) fornecidos pelo API Gateway.
+      2. Valida se o ID foi enviado corretamente.
+      3. Consulta o repositório do DynamoDB.
+      4. Se o item não for encontrado, retorna HTTP 404 (Not Found).
+      5. Se encontrado, retorna HTTP 200 (OK) com o payload do produto.
+    """
+    logger.info(f"Iniciando processamento de busca de produto por ID. Evento: {json.dumps(event)}")
+    try:
+        path_parameters = event.get("pathParameters") or {}
+        product_id = path_parameters.get("id")
 
-    product = products.get(product_id)
+        if not product_id:
+            logger.warning("Requisição rejeitada: ID do produto ausente nos parâmetros de rota.")
+            return create_error_response(400, "O parâmetro 'id' do produto é obrigatório no URL.")
 
-    if not product:
-        return {
-            'statusCode': 404,
-            'headers': {
-                'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*'
-            },
-            'body': json.dumps({'message': 'Product not found'})
-        }
 
-    return {
-        'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-        },
-        'body': json.dumps(product)
-    }
+        logger.info(f"Buscando informações para o ID do produto: {product_id}")
+        product = repository.get_by_id(product_id)
+
+        if not product:
+            logger.info(f"Produto com ID {product_id} não foi localizado no banco de dados.")
+            return create_error_response(404, f"Produto com ID {product_id} não encontrado.")
+
+        logger.info(f"Produto {product_id} localizado e recuperado com sucesso.")
+        return create_success_response(200, product)
+
+    except Exception as e:
+        logger.exception(f"Erro imprevisto ao tentar buscar o produto: {str(e)}")
+        return create_error_response(500, "Erro interno do servidor ao recuperar os dados do produto")

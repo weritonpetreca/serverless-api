@@ -19,6 +19,8 @@ cdk.out/
 # ==========================================
 __pycache__/
 *.pyc
+**/__pycache__/
+**/*.pyc
 *.pyo
 *.pyd
 .env
@@ -26,6 +28,8 @@ __pycache__/
 venv/
 pip-log.txt
 pip-delete-this-directory.txt
+lambda_code/.venv/
+lambda_code/vendor/
 
 # ==========================================
 # IDEs & Text Editors Configuration
@@ -61,4 +65,5 @@ pip-delete-this-directory.txt
 # OS Generated Files
 # ==========================================
 .DS_Store
-Thumbs.db
+Thumbs.dblambda_layer/python/
+lambda_layer/
