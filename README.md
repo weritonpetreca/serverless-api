@@ -3,7 +3,7 @@
 [![AWS Certified](https://img.shields.io/badge/AWS-Certified_Cloud_Practitioner-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/certification/certified-cloud-practitioner/)
 [![Java Version](https://img.shields.io/badge/Java-21-red?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Python Version](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Gradle](https://img.shields.io/badge/Gradle-9.3.0-blue?logo=gradle&logoColor=white)](https://gradle.org/)
+[![Gradle](https://img.shields.io/badge/Gradle-9.6.0-blue?logo=gradle&logoColor=white)](https://gradle.org/)
 [![AWS CDK](https://img.shields.io/badge/AWS_CDK-v2-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/cdk/v2/)
 [![Amazon DynamoDB](https://img.shields.io/badge/Amazon_DynamoDB-4053D6?logo=amazondynamodb&logoColor=white)](https://aws.amazon.com/dynamodb/)
 [![LocalStack](https://img.shields.io/badge/LocalStack-v3-00B2FF?logo=localstack&logoColor=white)](https://localstack.cloud/)
