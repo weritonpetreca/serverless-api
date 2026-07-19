@@ -17,6 +17,7 @@ import java.util.List;
 public class ProductApiStack extends Stack {
 
     private static final String TABLE_NAME_ENV = "PRODUCTS_TABLE_NAME";
+    private static final String CATEGORY_GSI_NAME = "category-index";
 
     public ProductApiStack(final Construct scope, final String constructId, final StackProps props) {
         super(scope, constructId, props);
@@ -31,7 +32,7 @@ public class ProductApiStack extends Stack {
                 .build();
 
         productsTable.addGlobalSecondaryIndex(GlobalSecondaryIndexProps.builder()
-                        .indexName("category-index")
+                        .indexName(CATEGORY_GSI_NAME)
                         .partitionKey(Attribute.builder()
                                 .name("category")
                                 .type(AttributeType.STRING)
@@ -49,16 +50,16 @@ public class ProductApiStack extends Stack {
 
         final Function queryProducts = createPythonLambda(
                 "QueryProducts",
-                "query_products.handler",
+                "handlers.query_products.handler",
                 productsTable,
                 dependencyLayer,
                 false
         );
-        queryProducts.addEnvironment("CATEGORY_GSI_NAME", "category-index");
+        queryProducts.addEnvironment("CATEGORY_GSI_NAME", CATEGORY_GSI_NAME);
 
         final Function getProduct = createPythonLambda(
                 "GetProduct",
-                "get_product.handler",
+                "handlers.get_product.handler",
                 productsTable,
                 dependencyLayer,
                 false
@@ -66,7 +67,7 @@ public class ProductApiStack extends Stack {
 
         final Function insertProduct = createPythonLambda(
                 "InsertProduct",
-                "insert_product.handler",
+                "handlers.insert_product.handler",
                 productsTable,
                 dependencyLayer,
                 true
@@ -74,7 +75,7 @@ public class ProductApiStack extends Stack {
 
         final Function updateProduct = createPythonLambda(
                 "UpdateProduct",
-                "update_product.handler",
+                "handlers.update_product.handler",
                 productsTable,
                 dependencyLayer,
                 true
@@ -116,7 +117,6 @@ public class ProductApiStack extends Stack {
                 .build();
 
         function.addEnvironment(TABLE_NAME_ENV, table.getTableName());
-
         function.addEnvironment("PYTHONPATH", "/var/task:/var/task/vendor");
 
         if (isWritable) {
