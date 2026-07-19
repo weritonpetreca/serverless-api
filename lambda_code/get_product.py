@@ -2,6 +2,7 @@ import json
 import logging
 from products_db import ProductsRepository
 from response_utils import create_success_response, create_error_response
+from error_handler import ErrorClassifier, ProductNotFoundError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -39,6 +40,12 @@ def handler(event, context):
         logger.info(f"Produto {product_id} localizado e recuperado com sucesso.")
         return create_success_response(200, product)
 
+    except ProductNotFoundError as e:
+        request_id = context.aws_request_id if context else "fallback-local-id"
+        logger.warning(f"Produto não localizado: {str(e)}")
+        return ErrorClassifier.handle_exception(e, request_id)
+
     except Exception as e:
+        request_id = context.aws_request_id if context else "fallback-local-id"
         logger.exception(f"Erro imprevisto ao tentar buscar o produto: {str(e)}")
-        return create_error_response(500, "Erro interno do servidor ao recuperar os dados do produto")
+        return ErrorClassifier.handle_exception(e, request_id)

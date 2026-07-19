@@ -1,6 +1,8 @@
 import json
 from unittest.mock import patch
 from get_product import handler
+from error_handler import ProductNotFoundError
+from utils.event_factory import APIGatewayEventFactory
 
 @patch("get_product.repository")
 def test_get_product_success(mock_repo):
@@ -72,4 +74,41 @@ def test_get_product_internal_error(mock_repo):
     # ASSERT
     assert response["statusCode"] == 500
     body = json.loads(response["body"])
-    assert "Erro interno do servidor" in body["error"]
+    assert "Erro interno do servidor" in body["error"]["message"]
+
+@patch("get_product.repository")
+def test_handler_should_return_structured_404_when_product_not_found(mock_repo):
+    """
+    Cenário: Busca por um ID de produto inexistente.
+    Esperado: Resposta HTTP 404 contendo o contrato JSON estrito da ADR 0003.
+    """
+    # 1. ARRANGE (Preparação do cenário)
+    invalid_id = "prod_witcher_999"
+
+    # Criamos o evento usando sua fábrica tática
+    mock_event = APIGatewayEventFactory.create_get_event(product_id=invalid_id)
+
+    # Criamos o contexto simulado da Lambda
+    class MockContext:
+        aws_request_id = "req-abc-123-xyz"
+    mock_context = MockContext()
+
+    # Em vez de return_value, usamos o side_effect no mock_repo que veio do decorator!
+    mock_repo.get_by_id.side_effect = ProductNotFoundError(f"Product with ID {invalid_id} was not found.")
+
+    # 2. ACT (Execução)
+    response = handler(mock_event, mock_context)
+
+    # 3. ASSERT (Validação do contrato da ADR 0003)
+    assert response["statusCode"] == 404
+    assert response["headers"]["Content-Type"] == "application/json"
+
+    body = json.loads(response["body"])
+
+    assert "error" in body
+    assert body["error"]["type"] == "product_not_found"
+    assert body["error"]["message"] == f"Product with ID {invalid_id} was not found."
+    assert body["error"]["request_id"] == "req-abc-123-xyz"
+    assert "timestamp" in body["error"]
+    assert "suggestions" in body["error"]
+    assert len(body["error"]["suggestions"]) > 0
