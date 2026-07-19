@@ -42,7 +42,7 @@ def test_get_product_not_found(mock_repo):
     # ASSERT
     assert response["statusCode"] == 404
     body = json.loads(response["body"])
-    assert "não encontrado" in body["error"]
+    assert "não foi encontrado" in body["error"]["message"]
 
 
 @patch("get_product.repository")

@@ -1,11 +1,10 @@
 import json
 import logging
 from products_db import ProductsRepository
-from response_utils import create_success_response, create_error_response
+from response_utils import create_success_response
 from error_handler import ErrorClassifier, ProductNotFoundError
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 repository = ProductsRepository()
 
@@ -27,6 +26,7 @@ def handler(event, context):
 
         if not product_id:
             logger.warning("Requisição rejeitada: ID do produto ausente nos parâmetros de rota.")
+            from response_utils import create_error_response
             return create_error_response(400, "O parâmetro 'id' do produto é obrigatório no URL.")
 
 
@@ -34,8 +34,7 @@ def handler(event, context):
         product = repository.get_by_id(product_id)
 
         if not product:
-            logger.info(f"Produto com ID {product_id} não foi localizado no banco de dados.")
-            return create_error_response(404, f"Produto com ID {product_id} não encontrado.")
+            raise ProductNotFoundError(f"Produto com ID {product_id} não foi encontrado.")
 
         logger.info(f"Produto {product_id} localizado e recuperado com sucesso.")
         return create_success_response(200, product)

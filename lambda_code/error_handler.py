@@ -5,6 +5,15 @@ class ProductNotFoundError(Exception):
     """Exceção lançada quando um produto não existe no DynamoDB."""
     pass
 
+class RetryableError(Exception):
+    """Exceção para falhas intermitentes que podem ter sucesso em uma nova tentativa."""
+    pass
+
+
+class PermanentError(Exception):
+    """Exceção para falhas críticas que não devem ser retentadas (ex: dados corrompidos)."""
+    pass
+
 
 class ErrorClassifier:
     """
@@ -20,7 +29,12 @@ class ErrorClassifier:
         """
         timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00",  "Z")
 
-        if isinstance(exception, ProductNotFoundError):
+        is_product_not_found = (
+            isinstance(exception, ProductNotFoundError) or
+            type(exception).__name__ == "ProductNotFoundError"
+        )
+
+        if is_product_not_found:
             status_code = 404
             error_payload = {
                 "error": {

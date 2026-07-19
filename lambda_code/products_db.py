@@ -2,10 +2,11 @@ import os
 import logging
 import boto3
 from botocore.exceptions import ClientError
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
+from error_handler import RetryableError
+from resilience import retry_with_backoff
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 _dynamodb_resource = boto3.resource("dynamodb")
 
@@ -15,7 +16,7 @@ class ProductsRepository:
     Isola o boto3 e os contratos específicos da AWS da lógica de negócios das Lambdas.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.table_name = os.environ.get("PRODUCTS_TABLE_NAME")
         if not self.table_name:
             logger.error("A variável de ambiente 'PRODUCTS_TABLE_NAME' não está configurada.")
@@ -23,6 +24,28 @@ class ProductsRepository:
 
         self.table = _dynamodb_resource.Table(self.table_name)
 
+    def _classify_and_raise_error(self, error: ClientError, context_message: str) -> None:
+        """
+        Method privado utilitário para interceptar códigos AWS
+        e decidir se a falha merece um Retry
+        """
+        error_code = error.response["Error"]["Code"]
+        error_message = error.response["Error"]["Message"]
+
+        logger.error(f"{context_message} | AWS Code: {error_code} | Message: {error_message}")
+
+        retryable_codes = {
+            "ProvisionedThroughputExceededException",
+            "ThrottlingException",
+            "InternalServerError"
+        }
+
+        if error_code in retryable_codes:
+            raise RetryableError(f"Instabilidade temporária na AWS: {error_message}")
+
+        raise error
+
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def get_by_id(self, product_id: str) -> Optional[Dict]:
         """
         [AP_01] Busca um único produto utilizando a Chave de Partição Primária (id).
@@ -32,19 +55,18 @@ class ProductsRepository:
             logger.info(f"Buscando produto no DynamoDB com ID: {product_id}")
             response = self.table.get_item(Key={"id": product_id})
             return response.get("Item")
-        except ClientError:
-            logger.exception(f"Erro ao buscar produto {product_id} no DynamoDB")
-            raise
+        except ClientError as e:
+            self._classify_and_raise_error(e, f"Erro ao buscar produto {product_id} no DynamoDB")
 
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def save(self, product_data: Dict) -> None:
         """Insere ou substitui completamente um item na tabela do DynamoDB."""
         try:
             logger.info(f"Gravando novo produto no DynamoDB com ID: {product_data.get('id')}")
             self.table.put_item(Item=product_data)
-        except ClientError:
-            logger.exception("Erro ao persistir produto no DynamoDB")
-            raise
-
+        except ClientError as e:
+            self._classify_and_raise_error(e, "Erro ao persistir produto no DynamoDB")
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def update(self, product_id: str, product_data: Dict) -> Optional[Dict]:
         """
         Atualiza campos específicos de um produto utilizando expressões de atualização do DynamoDB.
@@ -78,9 +100,10 @@ class ProductsRepository:
             )
             return response.get("Attributes")
 
-        except ClientError:
-            logger.exception(f"Erro ao atualizar produto {product_id} no DynamoDB")
+        except ClientError as e:
+            self._classify_and_raise_error(e, f"Erro ao atualizar produto {product_id} no DynamoDB")
 
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def find_by_category(self, category: str) -> List[Dict]:
         """[AP_02] Realiza uma busca indexada e barata por Categoria utilizando o GSI"""
         try:
@@ -92,6 +115,5 @@ class ProductsRepository:
                 ExpressionAttributeValues={":cat_val": category}
             )
             return response.get("Items", [])
-        except ClientError:
-            logger.exception(f"Erro ao buscar produtos da categoria {category} no GSI")
-            raise
+        except ClientError as e:
+            self._classify_and_raise_error(e, f"Erro ao buscar produtos da categoria {category} no GSI")
