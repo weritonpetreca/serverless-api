@@ -2,6 +2,8 @@ import json
 import logging
 import uuid
 from pydantic import ValidationError
+
+from error_handler import ErrorClassifier
 from products_db import ProductsRepository
 from product_schema import ProductInput
 from response_utils import create_success_response, create_error_response
@@ -42,15 +44,18 @@ def handler(event, context):
         return create_success_response(201, product_to_save)
 
     except ValidationError as e:
+        request_id = context.aws_request_id if context else "fallback-local-id"
         logger.warning(f"Falha na validação dos dados de entrada: {e.errors()}")
+        return ErrorClassifier.handle_exception(e, request_id)
 
-        error_details = [f"Campo '{err['loc'][0]}': {err['msg']}" for err in e.errors()]
-        return create_error_response(400, f"Dados inválidos: {', '.join(error_details)}")
-
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        request_id = context.aws_request_id if context else "fallback-local-id"
         logger.warning("Falha ao deserializar o corpo da requisição: JSON inválido.")
-        return create_error_response(400, "Formato JSON inválido no corpo da requisição.")
+        custom_error = ValueError("Formato JSON inválido no corpo da requisição.")
+        custom_error.__class__.__name__ = "ValidationError"
+        return ErrorClassifier.handle_exception(e, request_id)
 
     except Exception as e:
-        logger.exception(f"Erro inesperado e não tratado durante a execução do Lambda: {str(e)}")
-        return create_error_response(500, "Erro interno do servidor ao processar a requisição")
+        request_id = context.aws_request_id if context else "fallback-local-id"
+        logger.exception("Erro inesperado e não tratado durante a execução do Lambda.")
+        return ErrorClassifier.handle_exception(e, request_id)

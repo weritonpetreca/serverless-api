@@ -33,6 +33,7 @@ class ErrorClassifier:
             isinstance(exception, ProductNotFoundError) or
             type(exception).__name__ == "ProductNotFoundError"
         )
+        is_validation_error = type(exception).__name__ == "ValidationError"
 
         if is_product_not_found:
             status_code = 404
@@ -50,6 +51,26 @@ class ErrorClassifier:
                     ]
                 }
             }
+
+        elif is_validation_error:
+            status_code = 400
+            raw_details = exception.errors() if hasattr(exception, "errors") else []
+            formatted_details = [f"Campo '{err['loc'][0]}': {err['msg']}" for err in raw_details]
+
+            error_payload = {
+                "error": {
+                    "type": "validation_error",
+                    "message": "Os dados enviados na requisição falharam nas regras de validação de esquema.",
+                    "timestamp": timestamp,
+                    "request_id": request_id,
+                    "details": {"validation_errors": formatted_details},
+                    "suggestions": [
+                        "Revise os tipos de dados enviados (ex: price deve ser estritamente maior que zero).",
+                        "Garanta que a categoria pertence à lista permitida: ['Eletronics', 'Audio', 'Computers', 'Accessories', 'Home']."
+                    ]
+                }
+            }
+
         else:
             status_code = 500
             error_payload = {
