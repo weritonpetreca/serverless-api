@@ -1,15 +1,14 @@
 import json
 import logging
 import uuid
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
-from error_handler import ErrorClassifier
+from error_handler import ErrorClassifier, ValidationError as DomainValidationError
 from products_db import ProductsRepository
 from product_schema import ProductInput
 from response_utils import create_success_response, create_error_response
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 repository = ProductsRepository()
 
@@ -25,11 +24,12 @@ def handler(event, context):
       5. Retorna 201 (Created) com os dados do produto salvo.
     """
     logger.info(f"Iniciando processamento da requisição de cadastro de produto. Evento: {json.dumps(event)}")
+    request_id = context.aws_request_id if context else "falback-local-id"
 
     try:
         body_str = event.get("body")
         if not body_str:
-            return create_error_response(400, "O corpo da requisição (body) está vazio ou ausente.")
+            raise DomainValidationError("O corpo da requisição (body) está vazio ou ausente.")
 
         body_json = json.loads(body_str)
 
@@ -43,16 +43,18 @@ def handler(event, context):
         logger.info(f"Produto persistido com sucesso! ID gerado: {product_to_save['id']}")
         return create_success_response(201, product_to_save)
 
-    except ValidationError as e:
-        request_id = context.aws_request_id if context else "fallback-local-id"
-        logger.warning(f"Falha na validação dos dados de entrada: {e.errors()}")
+    except PydanticValidationError as e:
+        logger.warning(f"Falha na validação dos dados de entrada (Pydantic): {e.errors()}")
         return ErrorClassifier.handle_exception(e, request_id)
 
     except json.JSONDecodeError as e:
         request_id = context.aws_request_id if context else "fallback-local-id"
-        logger.warning("Falha ao deserializar o corpo da requisição: JSON inválido.")
-        custom_error = ValueError("Formato JSON inválido no corpo da requisição.")
-        custom_error.__class__.__name__ = "ValidationError"
+        logger.warning("Falha ao deserializar o corpo da requisição: JSON inválido de sintaxe.")
+        custom_error = DomainValidationError("Formato JSON inválido no corpo da requisição.")
+        return ErrorClassifier.handle_exception(custom_error, request_id)
+
+    except DomainValidationError as e:
+        logger.warning(f"Falha de validação de negócio: {str(e)}")
         return ErrorClassifier.handle_exception(e, request_id)
 
     except Exception as e:

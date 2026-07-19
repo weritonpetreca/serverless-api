@@ -51,4 +51,16 @@ def dynamodb_mock():
         # O 'yield' age como o divisor de águas: entrega o controle para o teste rodar
         yield table
 
-        # Após a execução do teste, o bloco 'with' fecha e limpa a memória RAM automaticamente
+@pytest.fixture(scope="function")
+def mock_context():
+    """
+    Fixture corporativa que emula o objeto 'context' da AWS Lambda.
+    Permite alterar o aws_request_id dinamicamente dentro de cada teste.
+    """
+    class LambdaContext:
+        def __init__(self):
+            self.aws_request_id = "req-corporate-default-id"
+            self.function_name = "serverless-product-api-prod"
+            self.memory_limit_in_mb = 128
+
+    return LambdaContext()

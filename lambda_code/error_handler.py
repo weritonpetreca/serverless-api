@@ -1,8 +1,13 @@
 import json
+from decimal import Decimal
 from datetime import datetime, timezone
 
 class ProductNotFoundError(Exception):
     """Exceção lançada quando um produto não existe no DynamoDB."""
+    pass
+
+class ValidationError(Exception):
+    """Exceção lançada para falhas de validação de dados de entrada ou parâmetros."""
     pass
 
 class RetryableError(Exception):
@@ -20,6 +25,17 @@ class ErrorClassifier:
     Componente centralizado para classificar exceções e
     formatar respostas de erro corporativas.
     """
+    @staticmethod
+    def _json_resilient_fallback(obj):
+        """
+        Função utilitária de fallback para garantir que o json.dumps nunca quebre
+        ao interceptar tipos complexos vindos dos metadados do Pydantic.
+        """
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, Exception):
+            return str(obj)
+        return str(obj)
 
     @staticmethod
     def handle_exception(exception: Exception, request_id: str) -> dict:
@@ -28,12 +44,14 @@ class ErrorClassifier:
         Retorna um dicionário vazio apenas para o teste poder rodar e falhar.
         """
         timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00",  "Z")
+        exception_class_name = type(exception).__name__
 
         is_product_not_found = (
-            isinstance(exception, ProductNotFoundError) or
-            type(exception).__name__ == "ProductNotFoundError"
+            isinstance(exception, ProductNotFoundError) or exception_class_name == "ProductNotFoundError"
         )
-        is_validation_error = type(exception).__name__ == "ValidationError"
+        is_validation_error = (
+            isinstance(exception, ValidationError) or exception_class_name == "ValidationError"
+        )
 
         if is_product_not_found:
             status_code = 404
@@ -54,19 +72,22 @@ class ErrorClassifier:
 
         elif is_validation_error:
             status_code = 400
-            raw_details = exception.errors() if hasattr(exception, "errors") else []
-            formatted_details = [f"Campo '{err['loc'][0]}': {err['msg']}" for err in raw_details]
+            error_message = str(exception)
+
+            details = {}
+            if hasattr(exception, "errors") and callable(getattr(exception, "errors")):
+                details["validation_errors"] = exception.errors()
 
             error_payload = {
                 "error": {
                     "type": "validation_error",
-                    "message": "Os dados enviados na requisição falharam nas regras de validação de esquema.",
+                    "message": error_message,
                     "timestamp": timestamp,
                     "request_id": request_id,
-                    "details": {"validation_errors": formatted_details},
+                    "details": details,
                     "suggestions": [
-                        "Revise os tipos de dados enviados (ex: price deve ser estritamente maior que zero).",
-                        "Garanta que a categoria pertence à lista permitida: ['Eletronics', 'Audio', 'Computers', 'Accessories', 'Home']."
+                        "Corrija os parâmetros informados na requisição.",
+                        "Certifique-se de que nenhum campo obrigatório foi omitido."
                     ]
                 }
             }
@@ -92,5 +113,5 @@ class ErrorClassifier:
                 "Content-Type": "application/json",
                 "Access-Control-Allow-Origin": "*"
             },
-            "body": json.dumps(error_payload)
+            "body": json.dumps(error_payload, default=ErrorClassifier._json_resilient_fallback)
         }
