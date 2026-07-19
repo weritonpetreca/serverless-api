@@ -1,10 +1,17 @@
 import json
-from unittest.mock import patch
-from query_products import handler
+import pytest
+from handlers.query_products import handler
 from utils.event_factory import APIGatewayEventFactory
 
 
-@patch("query_products.repository")
+@pytest.fixture
+def mock_repo(mocker):
+    """
+    Fixture local que intercepta o repositório importado no handler.
+    O pytest-mock (mocker) garante que o mock seja resetado a cada teste.
+    """
+    return mocker.patch("handlers.query_products.repository")
+
 def test_query_products_by_category_success(mock_repo):
     """Garante que a busca retorne a lista de produtos da categoria informada."""
     mock_list = [
@@ -24,7 +31,6 @@ def test_query_products_by_category_success(mock_repo):
     mock_repo.find_by_category.assert_called_once_with("Computers")
 
 
-@patch("query_products.repository")
 def test_query_products_missing_category(mock_repo, mock_context):
     """Garante HTTP 400 se a categoria não for informada na query string."""
     mock_event = APIGatewayEventFactory.create_get_event('',{})
@@ -43,7 +49,6 @@ def test_query_products_missing_category(mock_repo, mock_context):
     mock_repo.find_by_category.assert_not_called()
 
 
-@patch("query_products.repository")
 def test_query_products_internal_error(mock_repo, mock_context):
     """Garante HTTP 500 caso o GSI lance uma exceção."""
     mock_repo.find_by_category.side_effect = Exception("GSI Inacessível no DynamoDB")

@@ -1,8 +1,8 @@
 import json
 import logging
-from products_db import ProductsRepository
-from response_utils import create_success_response, create_error_response
-from error_handler import ErrorClassifier, ValidationError
+from repository.products_db import ProductsRepository
+from shared.response_utils import create_success_response
+from shared.error_handler import ErrorClassifier, ValidationError
 
 logger = logging.getLogger(__name__)
 

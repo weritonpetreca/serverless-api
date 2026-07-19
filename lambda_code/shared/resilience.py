@@ -3,7 +3,7 @@ import random
 import logging
 from functools import wraps
 from typing import Callable, Any
-from error_handler import RetryableError
+from shared.error_handler import RetryableError
 
 logger = logging.getLogger(__name__)
 

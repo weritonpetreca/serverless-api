@@ -2,9 +2,9 @@ import os
 import logging
 import boto3
 from botocore.exceptions import ClientError
-from typing import Dict, List, Optional, Any
-from error_handler import RetryableError
-from resilience import retry_with_backoff
+from typing import Dict, List, Optional
+from shared.error_handler import RetryableError
+from shared.resilience import retry_with_backoff
 
 logger = logging.getLogger(__name__)
 

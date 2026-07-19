@@ -3,7 +3,7 @@ import pytest
 import boto3
 from decimal import Decimal
 from testcontainers.core.container import DockerContainer
-from products_db import ProductsRepository
+from repository.products_db import ProductsRepository
 
 # ==============================================================================
 # 🐳 CONFIGURAÇÃO DO CONTAINER DOCKER (DYNAMODB LOCAL)
@@ -55,7 +55,7 @@ def dynamodb_service():
     os.environ["CATEGORY_GSI_NAME"] = "category-index"
 
     # Sobrescreve o resource global do products_db para apontar para o container Docker
-    import products_db
+    from repository import products_db
     products_db._dynamodb_resource = boto3.resource(
         "dynamodb",
         endpoint_url=endpoint_url,

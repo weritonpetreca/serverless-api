@@ -2,11 +2,10 @@ import json
 import logging
 import uuid
 from pydantic import ValidationError as PydanticValidationError
-
-from error_handler import ErrorClassifier, ValidationError as DomainValidationError
-from products_db import ProductsRepository
-from product_schema import ProductInput
-from response_utils import create_success_response, create_error_response
+from shared.error_handler import ErrorClassifier, ValidationError as DomainValidationError
+from repository.products_db import ProductsRepository
+from domain.product_schema import ProductInput
+from shared.response_utils import create_success_response
 
 logger = logging.getLogger(__name__)
 

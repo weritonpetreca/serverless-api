@@ -1,7 +1,6 @@
-import pytest
 from unittest.mock import Mock
-from error_handler import RetryableError
-from resilience import retry_with_backoff
+from shared.error_handler import RetryableError
+from shared.resilience import retry_with_backoff
 
 def test_decorator_should_retry_on_retryable_error_and_eventually_succeed(mocker):
     """

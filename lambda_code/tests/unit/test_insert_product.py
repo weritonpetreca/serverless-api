@@ -1,14 +1,21 @@
 import json
-from unittest.mock import patch
-from insert_product import handler
+import pytest
+from handlers.insert_product import handler
 from utils.event_factory import APIGatewayEventFactory
 
-@patch('insert_product.repository')
-def test_insert_product_success(mock_repository, mock_context):
+@pytest.fixture
+def mock_repo(mocker):
+    """
+    Fixture local que intercepta o repositório importado no handler.
+    O pytest-mock (mocker) garante que o mock seja resetado a cada teste.
+    """
+    return mocker.patch('handlers.insert_product.repository')
+
+def test_insert_product_success(mock_repo, mock_context):
     """
     Testa o cenário de sucesso na criação de um produto.
     Verifica se o status 201 é retornado, se um ID (UUID) foi gerado
-    e se o método de persistência do repositório foi chamado.
+    e se o method de persistência do repositório foi chamado.
     """
     mock_event = APIGatewayEventFactory.create_post_event({
         "title": "Espada de Aço de Kaer Morhen",
@@ -25,11 +32,10 @@ def test_insert_product_success(mock_repository, mock_context):
     assert "id" in body
     assert body["title"] == "Espada de Aço de Kaer Morhen"
     assert body["price"] == 450.00
-    mock_repository.save.assert_called_once_with(body)
+    mock_repo.save.assert_called_once_with(body)
 
 
-@patch('insert_product.repository')
-def test_insert_product_validation_error_price(mock_repository, mock_context):
+def test_insert_product_validation_error_price(mock_repo, mock_context):
     """
     Testa o fluxo de falha de validação de esquema (Preço negativo).
     Verifica se a Lambda barra com HTTP 400 estruturado de acordo com a ADR 0003.
@@ -54,11 +60,10 @@ def test_insert_product_validation_error_price(mock_repository, mock_context):
     assert "suggestions" in body["error"]
 
     assert "price" in body["error"]["message"].lower()
-    mock_repository.save.assert_not_called()
+    mock_repo.save.assert_not_called()
 
 
-@patch('insert_product.repository')
-def test_insert_product_empty_body(mock_repository, mock_context):
+def test_insert_product_empty_body(mock_repo, mock_context):
     """
     Garante retorno HTTP 400 estruturado quando o corpo da requisição
     estiver totalmente vazio ou ausente (DomainValidationError).
@@ -75,10 +80,9 @@ def test_insert_product_empty_body(mock_repository, mock_context):
     assert body["error"]["type"] == "validation_error"
     assert "vazio ou ausente" in body["error"]["message"]
     assert body["error"]["request_id"] == "req-insert-400-empty"
-    mock_repository.save.assert_not_called()
+    mock_repo.save.assert_not_called()
 
 
-@patch("insert_product.repository")
 def test_handler_should_return_structured_400_when_payload_has_invalid_category(mock_repo, mock_context):
     """
     Cenário: Envio de um payload de produto com uma categoria não permitida no itinerário.
@@ -107,7 +111,6 @@ def test_handler_should_return_structured_400_when_payload_has_invalid_category(
     mock_repo.save.assert_not_called()
 
 
-@patch("insert_product.repository")
 def test_insert_product_invalid_json_syntax(mock_repo, mock_context):
     """
     Cenário: Envio de uma string que não consegue ser parseada como JSON (Ex: aspas faltando).
