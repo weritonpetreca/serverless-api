@@ -26,7 +26,6 @@ No entanto, o acoplamento de bancos de dados tradicionais a arquiteturas serverl
 ## 03. Solução
 A arquitetura de persistência e validação foi construída de forma desacoplada utilizando **AWS CDK v2** em **Java 21**:
 
-<!-- TODO: Inserir Diagrama de Arquitetura do Draw.io aqui -->
 ![AWS Serverless Product API Architecture with DynamoDB](./architecture_v2.png)
 
 1.  **Amazon DynamoDB (Tabela "Products"):**

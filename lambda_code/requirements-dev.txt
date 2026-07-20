@@ -1,3 +1,19 @@
-pytest==7.4.0
-moto[dynamodb]==4.2.0
-boto3==1.28.0
+# Importa as dependências de produção
+-r requirements.txt
+
+# SDK AWS e Stubs para Autocomplete na IDE
+boto3==1.43.50
+boto3-stubs[dynamodb]==1.43.50
+
+# Ferramentas de Emulação e CLI AWS Local (Python)
+localstack>=3.0.0
+awscli-local
+
+# Frameworks de Testes (Unitários e Integração)
+pytest==9.1.1
+pytest-mock==3.15.1
+testcontainers[dynamodb]==4.14.2
+docker==7.2.0
+
+# Utilitários de Ambiente
+python-dotenv==1.2.2
