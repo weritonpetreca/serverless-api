@@ -6,6 +6,7 @@ from typing import Callable, Any
 from shared.error_handler import RetryableError
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 FuncType = Callable[..., Any]
 

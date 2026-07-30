@@ -1,13 +1,11 @@
 import os
 import boto3
 import pytest
-from moto import mock_dynamodb
+from moto import mock_aws  # 💡 Moto v5: Usa o mock_aws unificado
 
 # ==============================================================================
 # 🛡️ BLINDAGEM DO AMBIENTE (SHIFT-LEFT SECURITY)
 # ==============================================================================
-# Força o boto3 a usar credenciais falsas, garantindo que NENHUM teste
-# tente bater acidentalmente na sua conta real da AWS Cloud.
 os.environ["AWS_ACCESS_KEY_ID"] = "testing"
 os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
 os.environ["AWS_SECURITY_TOKEN"] = "testing"
@@ -16,15 +14,16 @@ os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
 
 os.environ["PRODUCTS_TABLE_NAME"] = "MockProductsTable"
 os.environ["CATEGORY_GSI_NAME"] = "category-index"
+os.environ["PRODUCT_IMAGE_BUCKET"] = "MockAssetsBucket"
 
 
 @pytest.fixture(scope="function")
 def dynamodb_mock():
     """
-    Fixture corporativa para emular o Amazon DynamoDB em memória RAM.
+    Fixture corporativa para emular o Amazon DynamoDB em memória RAM (Moto v5).
     Cria a tabela e o Global Secondary Index (GSI) antes de cada teste.
     """
-    with mock_dynamodb():
+    with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 
         table = dynamodb.create_table(
@@ -48,14 +47,27 @@ def dynamodb_mock():
             BillingMode='PAY_PER_REQUEST'
         )
 
-        # O 'yield' age como o divisor de águas: entrega o controle para o teste rodar
         yield table
+
+
+@pytest.fixture(scope="function")
+def s3_mock():
+    """
+    Fixture corporativa para emular o Amazon S3 em memória RAM (Moto v5).
+    Cria o bucket de mídias antes de cada teste.
+    """
+    with mock_aws():
+        s3_client = boto3.client("s3", region_name="us-east-1")
+        bucket_name = os.environ["PRODUCT_IMAGE_BUCKET"]
+        s3_client.create_bucket(Bucket=bucket_name)
+
+        yield s3_client
+
 
 @pytest.fixture(scope="function")
 def mock_context():
     """
     Fixture corporativa que emula o objeto 'context' da AWS Lambda.
-    Permite alterar o aws_request_id dinamicamente dentro de cada teste.
     """
     class LambdaContext:
         def __init__(self):

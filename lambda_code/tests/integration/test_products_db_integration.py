@@ -56,6 +56,7 @@ def dynamodb_service():
 
     # Sobrescreve o resource global do products_db para apontar para o container Docker
     from repository import products_db
+    original_resource = products_db._dynamodb_resource
     products_db._dynamodb_resource = boto3.resource(
         "dynamodb",
         endpoint_url=endpoint_url,
@@ -67,6 +68,7 @@ def dynamodb_service():
     yield endpoint_url
 
     # 5. Teardown: Para e remove o container do Docker de forma limpa
+    products_db._dynamodb_resource = original_resource
     container.stop()
 
 
@@ -120,3 +122,40 @@ def test_repository_update_dynamic_fields(dynamodb_service):
     assert updated_fields["price"] == Decimal("199.99")
     # O campo description NÃO foi atualizado, mas deve continuar existindo intacto!
     assert updated_fields["description"] == "Permite enxergar no escuro completo."
+
+def test_repository_add_image_to_product(dynamodb_service):
+    """
+    Valida fisicamente no container do DynamoDB Local a expressão atômica de anexar
+    URLs e metadados às listas image_urls e images_metadata do produto.
+    """
+    # ARRANGE
+    repo = ProductsRepository()
+    product_id = "prod-789"
+    initial_product = {
+        "id": product_id,
+        "title": "Mochila Tech",
+        "category": "Accessories",
+        "description": "Mochila à prova d'água.",
+        "price": Decimal("250.00")
+    }
+    repo.save(initial_product)
+
+    image_url = "https://MockAssetsBucket.s3.us-east-1.amazonaws.com/products/prod-789/main.jpg"
+    metadata = {
+        "image_url": image_url,
+        "object_key": "products/prod-789/main.jpg",
+        "file_size_bytes": 2048,
+        "upload_date": "2026-07-30T12:00:00Z"
+    }
+
+    # ACT (Anexa a imagem)
+    updated_attributes = repo.add_image_to_product(product_id, image_url, metadata)
+
+    # ASSERT (Verifica se as listas foram criadas e preenchidas sem apagar outros campos)
+    assert updated_attributes is not None
+    assert "image_urls" in updated_attributes
+    assert len(updated_attributes["image_urls"]) == 1
+    assert updated_attributes["image_urls"][0] == image_url
+    assert len(updated_attributes["images_metadata"]) == 1
+    assert updated_attributes["images_metadata"][0]["file_size_bytes"] == 2048
+    assert updated_attributes["title"] == "Mochila Tech"

@@ -5,15 +5,18 @@ from botocore.exceptions import ClientError
 from typing import Dict, List, Optional
 from shared.error_handler import RetryableError
 from shared.resilience import retry_with_backoff
+from repository.cache_db import CacheRepository
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 _dynamodb_resource = boto3.resource("dynamodb")
+
 
 class ProductsRepository:
     """
     Classe de Persistência (Data Access Object / Repository) para a tabela de Produtos no DynamoDB.
-    Isola o boto3 e os contratos específicos da AWS da lógica de negócios das Lambdas.
+    Aplica o padrão Cache-Aside (Lazy Loading) com Amazon ElastiCache Valkey.
     """
 
     def __init__(self) -> None:
@@ -23,11 +26,12 @@ class ProductsRepository:
             raise ValueError("Configuração do sistema inválida: falta nome da tabela.")
 
         self.table = _dynamodb_resource.Table(self.table_name)
+        self.cache = CacheRepository()
 
     def _classify_and_raise_error(self, error: ClientError, context_message: str) -> None:
         """
-        Method privado utilitário para interceptar códigos AWS
-        e decidir se a falha merece um Retry
+        Metodo privado utilitário para interceptar códigos AWS
+        e decidir se a falha merece um Retry.
         """
         error_code = error.response["Error"]["Code"]
         error_message = error.response["Error"]["Message"]
@@ -48,29 +52,53 @@ class ProductsRepository:
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def get_by_id(self, product_id: str) -> Optional[Dict]:
         """
-        [AP_01] Busca um único produto utilizando a Chave de Partição Primária (id).
-        Retorna o dicionário de atributos do produto ou None caso não exista.
+        [AP_01] Busca um produto utilizando a Chave Primária (id).
+        Aplica o padrão Cache-Aside: consulta o Valkey antes de ir ao DynamoDB.
         """
+        cache_key = f"product:{product_id}"
+        cached_product = self.cache.get_json(cache_key)
+        if cached_product is not None:
+            return cached_product
+
         try:
             logger.info(f"Buscando produto no DynamoDB com ID: {product_id}")
             response = self.table.get_item(Key={"id": product_id})
-            return response.get("Item")
+            item = response.get("Item")
+
+            if item:
+                # Salva no cache com TTL de 3600 segundos (1 hora)
+                self.cache.set_json(cache_key, item, ttl_seconds=3600)
+
+            return item
+
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao buscar produto {product_id} no DynamoDB")
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def save(self, product_data: Dict) -> None:
-        """Insere ou substitui completamente um item na tabela do DynamoDB."""
+        """
+        Insere um novo item na tabela do DynamoDB e invalida o cache do produto e da categoria.
+        """
         try:
-            logger.info(f"Gravando novo produto no DynamoDB com ID: {product_data.get('id')}")
+            product_id = product_data.get('id')
+            logger.info(f"Gravando novo produto no DynamoDB com ID: {product_id}")
             self.table.put_item(Item=product_data)
+
+            # Invalidação explícita de cache
+            if product_id:
+                self.cache.delete(f"product:{product_id}")
+            category = product_data.get("category")
+            if category:
+                self.cache.delete(f"search:category:{category}")
+
         except ClientError as e:
             self._classify_and_raise_error(e, "Erro ao persistir produto no DynamoDB")
+
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def update(self, product_id: str, product_data: Dict) -> Optional[Dict]:
         """
         Atualiza campos específicos de um produto utilizando expressões de atualização do DynamoDB.
-        Evita o risco de concorrência ou de apagar chaves acidentalmente
+        Invalida as chaves de cache afetadas pela alteração.
         """
         try:
             logger.info(f"Atualizando produto {product_id} no DynamoDB.")
@@ -98,14 +126,30 @@ class ProductsRepository:
                 ExpressionAttributeValues=expression_attribute_values,
                 ReturnValues="ALL_NEW"
             )
-            return response.get("Attributes")
+
+            updated_attributes = response.get("Attributes")
+
+            # Invalidação explícita de cache
+            self.cache.delete(f"product:{product_id}")
+            category = product_data.get("category")
+            if category:
+                self.cache.delete(f"search:category:{category}")
+
+            return updated_attributes
 
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao atualizar produto {product_id} no DynamoDB")
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
     def find_by_category(self, category: str) -> List[Dict]:
-        """[AP_02] Realiza uma busca indexada e barata por Categoria utilizando o GSI"""
+        """
+        [AP_02] Realiza uma busca por Categoria com Cache-Aside e consulta ao GSI do DynamoDB.
+        """
+        cache_key = f"search:category:{category}"
+        cached_list = self.cache.get_json(cache_key)
+        if cached_list is not None:
+            return cached_list
+
         try:
             logger.info(f"Buscando produtos no DynamoDB pertencentes à categoria: {category}")
             gsi_name = os.environ.get("CATEGORY_GSI_NAME", "category-index")
@@ -114,6 +158,48 @@ class ProductsRepository:
                 KeyConditionExpression="category = :cat_val",
                 ExpressionAttributeValues={":cat_val": category}
             )
-            return response.get("Items", [])
+            items = response.get("Items", [])
+
+            # Salva a lista no cache com TTL de 1800 segundos (30 minutos)
+            self.cache.set_json(cache_key, items, ttl_seconds=1800)
+
+            return items
+
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao buscar produtos da categoria {category} no GSI")
+
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
+    def add_image_to_product(self, product_id: str, image_url: str, metadata: Dict) -> Dict:
+        """
+        Associa a URL e os metadados de uma imagem ao produto no DynamoDB e invalida o cache.
+        """
+        try:
+            logger.info(f"Anexando imagem e metadados ao produto {product_id} no DynamoDB.")
+
+            update_expression = (
+                "SET image_urls = list_append(if_not_exists(image_urls, :empty_list), :new_url_list), "
+                "images_metadata = list_append(if_not_exists(images_metadata, :empty_list), :new_meta_list)"
+            )
+
+            expression_attribute_values = {
+                ":empty_list": [],
+                ":new_url_list": [image_url],
+                ":new_meta_list": [metadata]
+            }
+
+            response = self.table.update_item(
+                Key={"id": product_id},
+                UpdateExpression=update_expression,
+                ExpressionAttributeValues=expression_attribute_values,
+                ReturnValues="ALL_NEW"
+            )
+
+            updated_attributes = response.get("Attributes", {})
+
+            # Invalidação explícita de cache do produto
+            self.cache.delete(f"product:{product_id}")
+
+            return updated_attributes
+
+        except ClientError as e:
+            self._classify_and_raise_error(e, f"Erro ao anexar metadados da imagem ao produto {product_id} no DynamoDB")
