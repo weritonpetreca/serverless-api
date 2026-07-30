@@ -1,9 +1,6 @@
 package com.petreca;
 
-import software.amazon.awscdk.Duration;
-import software.amazon.awscdk.RemovalPolicy;
-import software.amazon.awscdk.Stack;
-import software.amazon.awscdk.StackProps;
+import software.amazon.awscdk.*;
 import software.amazon.awscdk.services.apigateway.CorsOptions;
 import software.amazon.awscdk.services.apigateway.IResource;
 import software.amazon.awscdk.services.apigateway.LambdaIntegration;
@@ -34,6 +31,10 @@ public class ProductApiStack extends Stack {
 
     public ProductApiStack(final Construct scope, final String constructId, final StackProps props) {
         super(scope, constructId, props);
+
+        Tags.of(this).add("Project", "ServerlessApi");
+        Tags.of(this).add("Environment", "Development");
+        Tags.of(this).add("ManagedBy", "AWS-CDK");
 
         // =========================================================================
         // 1. Tabela DynamoDB Original (Chave "id" e GSI "category-index" com ALL)
@@ -116,7 +117,7 @@ public class ProductApiStack extends Stack {
 
         final CfnCacheCluster valkeyCache = CfnCacheCluster.Builder.create(this, "ProductValkeyCache")
                 .clusterName("product-catalog-cache")
-                .engine("valkey")
+                .engine("redis")
                 .cacheNodeType("cache.t3.micro") // Nó otimizado para testes e baixo custo
                 .numCacheNodes(1)
                 .vpcSecurityGroupIds(List.of(cacheSecurityGroup.getSecurityGroupId()))

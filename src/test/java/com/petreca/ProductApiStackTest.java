@@ -160,7 +160,7 @@ class ProductApiStackTest {
 
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::ElastiCache::CacheCluster", Map.of(
-                        "Engine", "valkey",
+                        "Engine", "redis",
                         "CacheNodeType", "cache.t3.micro",
                         "NumCacheNodes", 1
                 ))
