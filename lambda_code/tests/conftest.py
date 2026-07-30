@@ -1,7 +1,7 @@
 import os
 import boto3
 import pytest
-from moto import mock_dynamodb, mock_s3
+from moto import mock_aws  # 💡 Moto v5: Usa o mock_aws unificado
 
 # ==============================================================================
 # 🛡️ BLINDAGEM DO AMBIENTE (SHIFT-LEFT SECURITY)
@@ -20,10 +20,10 @@ os.environ["PRODUCT_IMAGE_BUCKET"] = "MockAssetsBucket"
 @pytest.fixture(scope="function")
 def dynamodb_mock():
     """
-    Fixture corporativa para emular o Amazon DynamoDB em memória RAM.
+    Fixture corporativa para emular o Amazon DynamoDB em memória RAM (Moto v5).
     Cria a tabela e o Global Secondary Index (GSI) antes de cada teste.
     """
-    with mock_dynamodb():
+    with mock_aws():
         dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
 
         table = dynamodb.create_table(
@@ -53,10 +53,10 @@ def dynamodb_mock():
 @pytest.fixture(scope="function")
 def s3_mock():
     """
-    Fixture corporativa para emular o Amazon S3 em memória RAM.
+    Fixture corporativa para emular o Amazon S3 em memória RAM (Moto v5).
     Cria o bucket de mídias antes de cada teste.
     """
-    with mock_s3():
+    with mock_aws():
         s3_client = boto3.client("s3", region_name="us-east-1")
         bucket_name = os.environ["PRODUCT_IMAGE_BUCKET"]
         s3_client.create_bucket(Bucket=bucket_name)
