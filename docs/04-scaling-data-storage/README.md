@@ -29,46 +29,7 @@ Com o crescimento do catálogo de produtos e aumento do tráfego de usuários, d
 ## 03. Solução
 A aplicação foi expandida para criar um fluxo híbrido de armazenamento binário e caching em memória:
 
-```text
-                               ┌───────────────────────────┐
-                               │       Cliente HTTP        │
-                               └─────────────┬─────────────┘
-                                             │
-                      1. POST /products/{id}/image-upload-url
-                                             │
-                                             ▼
-                               ┌───────────────────────────┐
-                               │    Amazon API Gateway     │
-                               └─────────────┬─────────────┘
-                                             │
-                                             ▼
-                               ┌───────────────────────────┐
-                               │   GenerateUploadUrlLambda │
-                               └─────────────┬─────────────┘
-                                             │ 2. Retorna Presigned URL (HTTP 200)
-                                             ▼
-                               ┌───────────────────────────┐
-                               │   3. PUT Direto da Imagem │
-                               └─────────────┬─────────────┘
-                                             │
-                                             ▼
-┌──────────────────────────┐      ┌──────────────────────────┐
-│ Amazon ElastiCache       │◄─────┤      Amazon S3           │
-│ (Valkey / Redis)         │      │  (product-assets-bucket) │
-└─────────────▲────────────┘      └─────────────┬────────────┘
-              │                                 │ 4. Evento s3:ObjectCreated
-              │ (Cache Hit / Miss)              ▼
-              │                   ┌──────────────────────────┐
-              ├───────────────────┤ ProcessImageMetadata     │
-              │                   │ Lambda                   │
-              │                   └─────────────┬────────────┘
-              │                                 │
-              │                                 │ 5. Atualiza Metadados
-              ▼                                 ▼
-┌────────────────────────────────────────────────────────────┐
-│                  Amazon DynamoDB (Products)                │
-└────────────────────────────────────────────────────────────┘
-```
+![AWS Serverless Product API Architecture with DynamoDB](./architecture_v4.png)
 
 1. **Desacoplamento de Upload via Presigned URLs (`handlers/generate_upload_url.py`):**
    O cliente solicita uma URL pré-assinada (`POST /products/{id}/upload-url`) válida por 1 hora com trava de `ContentType` (`image/jpeg`, `image/png`, `image/webp`), realizando o `PUT` diretamente para o S3.
