@@ -1,11 +1,22 @@
 from decimal import Decimal
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List
 from pydantic import BaseModel, Field, field_validator, PlainSerializer
 
 DecimalJsonAsFloat = Annotated[
     Decimal,
     PlainSerializer(lambda v: float(v), return_type=float, when_used='json')
 ]
+
+
+class ProductImageMetadata(BaseModel):
+    """
+    Representa os metadados detalhados de uma imagem enviada para o Amazon S3.
+    """
+    image_url: str = Field(description="URL de acesso da imagem no S3.")
+    object_key: str = Field(description="Chave única do objeto no S3 (ex: products/id/main.jpg).")
+    file_size_bytes: int = Field(gt=0, description="Tamanho do arquivo em bytes.")
+    upload_date: str = Field(description="Data de upload no formato ISO 8601.")
+
 
 class ProductInput(BaseModel):
     """
@@ -51,6 +62,7 @@ class ProductInput(BaseModel):
                 f"Categoria inválida: '{value}'. Categorias permitidas: {valid_categories}"
             )
         return value
+
 
 class ProductUpdateInput(BaseModel):
     """
@@ -99,3 +111,33 @@ class ProductUpdateInput(BaseModel):
                     f"Categoria inválida: '{value}'. Categorias permitidas: {valid_categories}"
                 )
         return value
+
+
+class PresignedUrlResponse(BaseModel):
+    """
+    Contrato de resposta para o endpoint de solicitação de URL pré-assinada de upload.
+    """
+    upload_url: str = Field(description="URL temporária pré-assinada do S3 para upload direto via PUT.")
+    object_key: str = Field(description="Chave única do objeto que será criado no S3.")
+    expires_in: int = Field(default=3600, description="Tempo de expiração da URL em segundos.")
+
+
+class ProductResponse(BaseModel):
+    """
+    Representa o contrato de saída completo do produto serializado para JSON na resposta da API.
+    """
+    id: str = Field(description="Identificador único do produto.")
+    title: str = Field(description="Título do produto.")
+    category: str = Field(description="Categoria do produto.")
+    description: str = Field(description="Descrição detalhada.")
+    price: DecimalJsonAsFloat = Field(description="Preço convertido para float em JSON.")
+    image_urls: List[str] = Field(
+        default_factory=list,
+        description="Lista de URLs de imagens associadas ao produto."
+    )
+    images_metadata: List[ProductImageMetadata] = Field(
+        default_factory=list,
+        description="Lista com metadados detalhados das imagens processadas no S3."
+    )
+    created_at: Optional[str] = Field(default=None, description="Timestamp de criação.")
+    updated_at: Optional[str] = Field(default=None, description="Timestamp de última atualização.")

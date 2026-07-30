@@ -7,6 +7,7 @@ from shared.error_handler import ErrorClassifier, ProductNotFoundError, Validati
 from shared.response_utils import create_success_response
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 repository = ProductsRepository()
 

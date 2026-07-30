@@ -7,6 +7,7 @@ from shared.error_handler import RetryableError
 from shared.resilience import retry_with_backoff
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 _dynamodb_resource = boto3.resource("dynamodb")
 
@@ -117,3 +118,36 @@ class ProductsRepository:
             return response.get("Items", [])
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao buscar produtos da categoria {category} no GSI")
+
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
+    def add_image_to_product(self, product_id: str, image_url: str, metadata: Dict) -> Dict:
+        """
+        Associa a URL e os metadados detalhados de uma imagem enviada ao S3 no item do produto no DynamoDB.
+        Utiliza expressões de atualização para anexar aos arrays image_urls e images_metadata de forma atômica.
+        """
+        try:
+            logger.info(f"Anexando imagem e metadados ao produto {product_id} no DynamoDB.")
+
+            # Expressão atômica do DynamoDB para inicializar e anexar itens às listas
+            update_expression = (
+                "SET image_urls = list_append(if_not_exists(image_urls, :empty_list), :new_url_list), "
+                "images_metadata = list_append(if_not_exists(images_metadata, :empty_list), :new_meta_list)"
+            )
+
+            expression_attribute_values = {
+                ":empty_list": [],
+                ":new_url_list": [image_url],
+                ":new_meta_list": [metadata]
+            }
+
+            response = self.table.update_item(
+                Key={"id": product_id},
+                UpdateExpression=update_expression,
+                ExpressionAttributeValues=expression_attribute_values,
+                ReturnValues="ALL_NEW"
+            )
+
+            return response.get("Attributes", {})
+
+        except ClientError as e:
+            self._classify_and_raise_error(e, f"Erro ao anexar metadados da imagem ao produto {product_id} no DynamoDB")
