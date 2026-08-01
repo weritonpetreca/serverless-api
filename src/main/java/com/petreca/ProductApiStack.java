@@ -253,6 +253,12 @@ public class ProductApiStack extends Stack {
                 .description("Feature Flag para ativacao do processamento de imagem")
                 .build();
 
+        final StringParameter s3UploadExpirationParam = StringParameter.Builder.create(this, "S3UploadExpirationParam")
+                .parameterName(ssmPrefixPath + "/s3_presigned_url_expiration")
+                .stringValue("3600")
+                .description("Tempo de expiração em segundos para URLs pré-assinadas de upload no S3")
+                .build();
+
         final List<Function> allFunctions = List.of(
                 queryProducts, getProduct, insertProduct, updateProduct,
                 generateUploadUrl, processImageMetadata
@@ -262,6 +268,7 @@ public class ProductApiStack extends Stack {
             apiTimeoutParam.grantRead(fn);
             circuitThresholdParam.grantRead(fn);
             featureFlagImageParam.grantRead(fn);
+            s3UploadExpirationParam.grantRead(fn);
         }
 
         // =========================================================================

@@ -6,6 +6,7 @@ from shared.response_utils import decimal_serializer
 import redis
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class CacheRepository:

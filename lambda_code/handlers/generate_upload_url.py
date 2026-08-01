@@ -58,7 +58,7 @@ def handler(event, context):
             )
 
         # 🚀 LEITURA DINÂMICA DO TIMEOUT/EXPIRAÇÃO VIA AWS SSM PARAMETER STORE
-        raw_timeout = config_manager.get_parameter("api_timeout", default_value="3600")
+        raw_timeout = config_manager.get_parameter("s3_presigned_url_expiration", default_value="3600")
         try:
             expires_in = int(raw_timeout)
         except ValueError:

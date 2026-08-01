@@ -182,6 +182,14 @@ class ProductApiStackTest {
                         "Value", "true"
                 ))
         );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::SSM::Parameter", Map.of(
+                        "Name", "/store/dev/config/s3_presigned_url_expiration",
+                        "Type", "String",
+                        "Value", "3600"
+                ))
+        );
     }
 
     @Test
