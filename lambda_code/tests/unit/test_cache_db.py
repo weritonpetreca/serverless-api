@@ -21,7 +21,7 @@ def test_cache_repository_get_and_set_json(mocker):
     retrieved_data = repo.get_json("product:prod_1")
 
     # ASSERT
-    mock_redis.setex.assert_called_once()
+    mock_redis.set.assert_called_once()
     mock_redis.get.assert_called_once_with("product:prod_1")
     assert retrieved_data is not None
     assert retrieved_data["id"] == "prod_1"

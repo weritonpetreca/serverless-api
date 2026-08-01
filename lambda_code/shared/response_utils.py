@@ -37,10 +37,3 @@ def create_api_response(status_code:int, body_data: Any) -> Dict[str, Any]:
 def create_success_response(status_code: int, data: Any) -> Dict[str, Any]:
     """Gera um envelope de resposta de sucesso (200 OK, 201 Created, etc)"""
     return create_api_response(status_code, data)
-
-def create_error_response(status_code: int, error_message: str) -> Dict[str, Any]:
-    """
-    Gera um envelope padronizado para erros da API (400 Bad Request, 404 Not Found, etc).
-    Garante que o cliente consuma um formato previsível: {"error": "mensagem de erro"}.
-    """
-    return create_api_response(status_code, {"error": error_message})

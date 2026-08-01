@@ -8,13 +8,15 @@ from botocore.exceptions import ClientError
 
 from domain.product_schema import ProductImageMetadata
 from repository.products_db import ProductsRepository
+from shared.config_manager import SSMParameterManager
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Inicialização dos clientes Boto3 no escopo global (Warm Start)
+# Inicialização dos clientes Boto3 e Gerenciadores no escopo global (Warm Start)
 s3_client = boto3.client("s3")
 repository = ProductsRepository()
+config_manager = SSMParameterManager(ttl_seconds=300)
 
 
 def _process_s3_record(record: Dict[str, Any], bucket_owner_id: Optional[str]) -> Optional[Dict[str, str]]:
@@ -38,6 +40,7 @@ def _process_s3_record(record: Dict[str, Any], bucket_owner_id: Optional[str]) -
         logger.warning(f"Chave S3 fora do padrão do catálogo ignorada: {object_key}")
         return None
 
+    # Extrai o ID do produto da posição 1 do array (ex: 'prod_123')
     product_id = key_parts[1]
 
     # Parâmetros para validação de proprietário do bucket S3 (DevSecOps)
@@ -46,7 +49,7 @@ def _process_s3_record(record: Dict[str, Any], bucket_owner_id: Optional[str]) -
         head_params["ExpectedBucketOwner"] = bucket_owner_id
 
     try:
-        # Obtenção dos metadados do arquivo no S3
+        # Obtenção dos metadados do arquivo no S3 via head_object
         head_response = s3_client.head_object(**head_params)
         file_size_bytes = head_response.get("ContentLength", 0)
         last_modified = head_response.get("LastModified")
@@ -91,6 +94,19 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     logger.info(f"Iniciando processamento de evento S3. Evento: {json.dumps(event)}")
 
+    # -------------------------------------------------------------------------
+    # 1. VERIFICAÇÃO DINÂMICA DE FEATURE FLAG VIA AWS SSM PARAMETER STORE
+    # -------------------------------------------------------------------------
+    if not config_manager.is_feature_enabled("feature_flag_image_processing"):
+        logger.info("⏸️ Feature flag 'feature_flag_image_processing' está DESATIVADA no SSM. Ignorando processamento.")
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"message": "Processamento de imagens desativado dinamicamente via Feature Flag."})
+        }
+
+    # -------------------------------------------------------------------------
+    # 2. PROCESSAMENTO REGULAR DOS REGISTROS DO S3
+    # -------------------------------------------------------------------------
     records = event.get("Records") or []
     if not records:
         logger.warning("Nenhum registro 'Records' encontrado no evento do S3.")

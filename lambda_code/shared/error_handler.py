@@ -19,6 +19,9 @@ class PermanentError(Exception):
     """Exceção para falhas críticas que não devem ser retentadas (ex: dados corrompidos)."""
     pass
 
+class CircuitBreakerOpenError(Exception):
+    """Exceção lançada quando uma chamada para serviço externo é bloqueada por disjuntor ABERTO."""
+    pass
 
 class ErrorClassifier:
     """
@@ -39,10 +42,6 @@ class ErrorClassifier:
 
     @staticmethod
     def handle_exception(exception: Exception, request_id: str) -> dict:
-        """
-        Casca vazia que temporariamente não trata nada.
-        Retorna um dicionário vazio apenas para o teste poder rodar e falhar.
-        """
         timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00",  "Z")
         exception_class_name = type(exception).__name__
 
@@ -51,6 +50,9 @@ class ErrorClassifier:
         )
         is_validation_error = (
             isinstance(exception, ValidationError) or exception_class_name == "ValidationError"
+        )
+        is_circuit_open = (
+                isinstance(exception, CircuitBreakerOpenError) or exception_class_name == "CircuitBreakerOpenError"
         )
 
         if is_product_not_found:
@@ -88,6 +90,22 @@ class ErrorClassifier:
                     "suggestions": [
                         "Corrija os parâmetros informados na requisição.",
                         "Certifique-se de que nenhum campo obrigatório foi omitido."
+                    ]
+                }
+            }
+
+        elif is_circuit_open:
+            status_code = 503
+            error_payload = {
+                "error": {
+                    "type": "service_unavailable",
+                    "message": str(exception),
+                    "timestamp": timestamp,
+                    "request_id": request_id,
+                    "details": {"circuit_breaker_state": "OPEN"},
+                    "suggestions": [
+                        "O serviço de integração externo está indisponível no momento.",
+                        "O sistema bloqueou chamadas repetidas para evitar sobrecarga. Tente novamente em alguns minutos."
                     ]
                 }
             }

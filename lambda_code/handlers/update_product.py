@@ -3,13 +3,17 @@ import logging
 from pydantic import ValidationError
 from repository.products_db import ProductsRepository
 from domain.product_schema import ProductUpdateInput
+from shared.config_manager import SSMParameterManager
 from shared.error_handler import ErrorClassifier, ProductNotFoundError, ValidationError as DomainValidationError
 from shared.response_utils import create_success_response
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Inicialização dos objetos no escopo global para reaproveitamento em Warm Starts
 repository = ProductsRepository()
+config_manager = SSMParameterManager(ttl_seconds=300)
+
 
 def handler(event, context):
     """
@@ -18,6 +22,8 @@ def handler(event, context):
     """
     logger.info(f"Iniciando processo de atualização de produto. Evento: {json.dumps(event)}")
     request_id = context.aws_request_id if context else "fallback-local-id"
+    product_id = "desconhecido"
+
     try:
         path_parameters = event.get("pathParameters") or {}
         product_id = path_parameters.get("id")
@@ -25,6 +31,11 @@ def handler(event, context):
         if not product_id:
             logger.warning("Tentativa de atualização sem fornecer o ID do produto.")
             raise DomainValidationError("O parâmetro 'id' na URL é obrigatório.")
+
+        # 1. Validação de Feature Flag via AWS SSM Parameter Store (Dynamic Control)
+        if not config_manager.is_feature_enabled("feature_flag_image_processing"):
+            logger.warning(f"Tentativa de atualização rejeitada para produto ID {product_id}: Operações desativadas via SSM Feature Flag.")
+            raise DomainValidationError("Atualizações no catálogo estão temporariamente desativadas para manutenção.")
 
         body_str = event.get("body")
         if not body_str:
@@ -59,5 +70,6 @@ def handler(event, context):
         return ErrorClassifier.handle_exception(custom_error, request_id)
 
     except Exception as e:
-        logger.critical(f"Erro catastrófico ao atualizar produto no DynamoDB: {str(e)}")
+        # SonarQube S8572: Registro do traceback completo no CloudWatch Logs via logger.exception
+        logger.exception(f"Erro catastrófico ao atualizar produto ID {product_id} no DynamoDB.")
         return ErrorClassifier.handle_exception(e, request_id)
