@@ -5,14 +5,16 @@ import boto3
 from botocore.exceptions import ClientError
 
 from domain.product_schema import PresignedUrlResponse
+from shared.config_manager import SSMParameterManager
 from shared.error_handler import ErrorClassifier, ValidationError as DomainValidationError
 from shared.response_utils import create_success_response
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# Inicialização do cliente S3 fora do handler (Warm Start / Reutilização de Conexões)
+# Inicialização dos clientes Boto3 e Gerenciadores no escopo global (Warm Start)
 s3_client = boto3.client("s3")
+config_manager = SSMParameterManager(ttl_seconds=300)
 
 # Mapeamento de MIME types permitidos para extensões de arquivo (DevSecOps Hardening)
 ALLOWED_CONTENT_TYPES = {
@@ -55,10 +57,17 @@ def handler(event, context):
                 f"Tipos permitidos: {list(ALLOWED_CONTENT_TYPES.keys())}"
             )
 
+        # 🚀 LEITURA DINÂMICA DO TIMEOUT/EXPIRAÇÃO VIA AWS SSM PARAMETER STORE
+        raw_timeout = config_manager.get_parameter("api_timeout", default_value="3600")
+        try:
+            expires_in = int(raw_timeout)
+        except ValueError:
+            expires_in = 3600
+
         extension = ALLOWED_CONTENT_TYPES[content_type]
         object_key = f"products/{product_id}/{image_type}{extension}"
 
-        # Gera a URL Pré-assinada limitando o ContentType na assinatura do S3
+        # Gera a URL Pré-assinada limitando o ContentType e usando a expiração dinâmica do SSM
         presigned_url = s3_client.generate_presigned_url(
             "put_object",
             Params={
@@ -66,21 +75,22 @@ def handler(event, context):
                 "Key": object_key,
                 "ContentType": content_type
             },
-            ExpiresIn=3600
+            ExpiresIn=expires_in
         )
 
         response_data = PresignedUrlResponse(
             upload_url=presigned_url,
             object_key=object_key,
-            expires_in=3600
+            expires_in=expires_in
         )
 
-        logger.info(f"Presigned URL para upload gerada com sucesso para a chave: {object_key}")
+        logger.info(f"Presigned URL para upload gerada com sucesso para a chave: {object_key} (Expira em: {expires_in}s)")
         return create_success_response(200, response_data.model_dump())
 
     except (DomainValidationError,) as e:
         return ErrorClassifier.handle_exception(e, request_id)
 
     except Exception as e:
-        logger.critical(f"Erro catastrófico ao gerar Presigned URL no S3: {str(e)}")
+        # SonarQube S8572: Registro completo do traceback no CloudWatch Logs
+        logger.exception("Erro catastrófico ao gerar Presigned URL no S3.")
         return ErrorClassifier.handle_exception(e, request_id)

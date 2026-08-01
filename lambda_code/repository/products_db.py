@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 from typing import Dict, List, Optional
 from shared.error_handler import RetryableError
 from shared.resilience import retry_with_backoff
+from shared.config_manager import SSMParameterManager
 from repository.cache_db import CacheRepository
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ _dynamodb_resource = boto3.resource("dynamodb")
 class ProductsRepository:
     """
     Classe de Persistência (Data Access Object / Repository) para a tabela de Produtos no DynamoDB.
-    Aplica o padrão Cache-Aside (Lazy Loading) com Amazon ElastiCache Valkey.
+    Aplica o padrão Cache-Aside (Lazy Loading) com ElastiCache e governança de configurações dinâmicas via SSM Parameter Store.
     """
 
     def __init__(self) -> None:
@@ -27,6 +28,7 @@ class ProductsRepository:
 
         self.table = _dynamodb_resource.Table(self.table_name)
         self.cache = CacheRepository()
+        self.config = SSMParameterManager(ttl_seconds=300)
 
     def _classify_and_raise_error(self, error: ClientError, context_message: str) -> None:
         """
@@ -53,7 +55,8 @@ class ProductsRepository:
     def get_by_id(self, product_id: str) -> Optional[Dict]:
         """
         [AP_01] Busca um produto utilizando a Chave Primária (id).
-        Aplica o padrão Cache-Aside: consulta o Valkey antes de ir ao DynamoDB.
+        Aplica o padrão Cache-Aside: consulta o ElastiCache antes de ir ao DynamoDB.
+        Lê o TTL de cache dinamicamente a partir do AWS SSM Parameter Store.
         """
         cache_key = f"product:{product_id}"
         cached_product = self.cache.get_json(cache_key)
@@ -66,8 +69,14 @@ class ProductsRepository:
             item = response.get("Item")
 
             if item:
-                # Salva no cache com TTL de 3600 segundos (1 hora)
-                self.cache.set_json(cache_key, item, ttl_seconds=3600)
+                # Leitura dinâmica do TTL de cache do produto via SSM Parameter Store
+                raw_ttl = self.config.get_parameter("cache_ttl_product", default_value="3600")
+                try:
+                    ttl_seconds = int(raw_ttl)
+                except ValueError:
+                    ttl_seconds = 3600
+
+                self.cache.set_json(cache_key, item, ttl_seconds=ttl_seconds)
 
             return item
 
@@ -144,6 +153,7 @@ class ProductsRepository:
     def find_by_category(self, category: str) -> List[Dict]:
         """
         [AP_02] Realiza uma busca por Categoria com Cache-Aside e consulta ao GSI do DynamoDB.
+        Lê o TTL de cache dinamicamente a partir do AWS SSM Parameter Store.
         """
         cache_key = f"search:category:{category}"
         cached_list = self.cache.get_json(cache_key)
@@ -160,8 +170,14 @@ class ProductsRepository:
             )
             items = response.get("Items", [])
 
-            # Salva a lista no cache com TTL de 1800 segundos (30 minutos)
-            self.cache.set_json(cache_key, items, ttl_seconds=1800)
+            # Leitura dinâmica do TTL de cache de categoria via SSM Parameter Store
+            raw_ttl = self.config.get_parameter("cache_ttl_category", default_value="1800")
+            try:
+                ttl_seconds = int(raw_ttl)
+            except ValueError:
+                ttl_seconds = 1800
+
+            self.cache.set_json(cache_key, items, ttl_seconds=ttl_seconds)
 
             return items
 

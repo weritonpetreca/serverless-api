@@ -13,6 +13,7 @@ import software.amazon.awscdk.services.lambda.*;
 import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.lambda.eventsources.S3EventSource;
 import software.amazon.awscdk.services.s3.*;
+import software.amazon.awscdk.services.ssm.StringParameter;
 import software.constructs.Construct;
 
 import java.util.List;
@@ -24,10 +25,16 @@ public class ProductApiStack extends Stack {
     private static final String TABLE_NAME_ENV = "PRODUCTS_TABLE_NAME";
     private static final String CATEGORY_GSI_NAME = "category-index";
 
-    // Novas constantes para S3 e ElastiCache Valkey
+    // Constantes para S3 e ElastiCache Redis
     private static final String BUCKET_NAME_ENV = "PRODUCT_IMAGE_BUCKET";
-    private static final String VALKEY_HOST_ENV = "VALKEY_HOST";
-    private static final String VALKEY_PORT_ENV = "VALKEY_PORT";
+    private static final String REDIS_HOST_ENV = "REDIS_HOST";
+    private static final String REDIS_PORT_ENV = "REDIS_PORT";
+
+    // Constante para a variável de ambiente do prefixo SSM
+    private static final String SSM_CONFIG_PREFIX_ENV = "SSM_CONFIG_PREFIX";
+
+    // Record Java 21 para encapsular a rede da Lambda (SonarQube S107 Fix - Max 7 Params)
+    public record LambdaNetworkConfig(Vpc vpc, SecurityGroup securityGroup) {}
 
     public ProductApiStack(final Construct scope, final String constructId, final StackProps props) {
         super(scope, constructId, props);
@@ -35,6 +42,11 @@ public class ProductApiStack extends Stack {
         Tags.of(this).add("Project", "ServerlessApi");
         Tags.of(this).add("Environment", "Development");
         Tags.of(this).add("ManagedBy", "AWS-CDK");
+
+        // Resolução dinâmica do caminho SSM via CDK Context
+        final Object envObj = this.getNode().tryGetContext("environment");
+        final String envScope = (envObj instanceof String envStr && !envStr.isBlank()) ? envStr : "dev";
+        final String ssmPrefixPath = "/store/" + envScope + "/config";
 
         // =========================================================================
         // 1. Tabela DynamoDB Original (Chave "id" e GSI "category-index" com ALL)
@@ -64,12 +76,12 @@ public class ProductApiStack extends Stack {
         final Bucket assetsBucket = Bucket.Builder.create(this, "ProductAssetsBucket")
                 .versioned(true)
                 .encryption(BucketEncryption.S3_MANAGED)
-                .blockPublicAccess(BlockPublicAccess.BLOCK_ALL) // Cibersegurança Hardening
+                .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
                 .removalPolicy(RemovalPolicy.DESTROY)
                 .autoDeleteObjects(true)
                 .build();
 
-        // FinOps: Regras de ciclo de vida para otimização de custos de armazenamento
+        // FinOps: Regras de ciclo de vida do S3
         assetsBucket.addLifecycleRule(LifecycleRule.builder()
                 .id("ProductImageLifecycle")
                 .enabled(true)
@@ -88,7 +100,7 @@ public class ProductApiStack extends Stack {
                 .build());
 
         // =========================================================================
-        // 3. Camada de Rede (VPC) e ElastiCache Valkey
+        // 3. Camada de Rede (VPC) e ElastiCache Redis
         // =========================================================================
         final Vpc vpc = Vpc.Builder.create(this, "ProductApiVpc")
                 .maxAzs(2)
@@ -96,11 +108,11 @@ public class ProductApiStack extends Stack {
 
         final SecurityGroup cacheSecurityGroup = SecurityGroup.Builder.create(this, "CacheSecurityGroup")
                 .vpc(vpc)
-                .description("Permite acesso ao ElastiCache Valkey na porta 6379 a partir da VPC")
+                .description("Permite acesso ao ElastiCache Redis na porta 6379 a partir da VPC")
                 .allowAllOutbound(true)
                 .build();
 
-        cacheSecurityGroup.addIngressRule(Peer.ipv4(vpc.getVpcCidrBlock()), Port.tcp(6379), "Acesso ao Valkey Redis");
+        cacheSecurityGroup.addIngressRule(Peer.ipv4(vpc.getVpcCidrBlock()), Port.tcp(6379), "Acesso ao Redis Cache");
 
         final List<String> isolatedSubnetIds = vpc.getIsolatedSubnets().stream()
                 .map(ISubnet::getSubnetId)
@@ -111,18 +123,21 @@ public class ProductApiStack extends Stack {
         final List<String> cacheSubnetIds = isolatedSubnetIds.isEmpty() ? privateSubnetIds : isolatedSubnetIds;
 
         final CfnSubnetGroup cacheSubnetGroup = CfnSubnetGroup.Builder.create(this, "CacheSubnetGroup")
-                .description("Subnets privadas para o ElastiCache Valkey")
+                .description("Subnets privadas para o ElastiCache Redis")
                 .subnetIds(cacheSubnetIds)
                 .build();
 
-        final CfnCacheCluster valkeyCache = CfnCacheCluster.Builder.create(this, "ProductValkeyCache")
+        final CfnCacheCluster redisCache = CfnCacheCluster.Builder.create(this, "ProductValkeyCache")
                 .clusterName("product-catalog-cache")
                 .engine("redis")
-                .cacheNodeType("cache.t3.micro") // Nó otimizado para testes e baixo custo
+                .cacheNodeType("cache.t3.micro")
                 .numCacheNodes(1)
                 .vpcSecurityGroupIds(List.of(cacheSecurityGroup.getSecurityGroupId()))
                 .cacheSubnetGroupName(cacheSubnetGroup.getRef())
                 .build();
+
+        // Objeto de configuração de rede para encapsulamento
+        final LambdaNetworkConfig networkConfig = new LambdaNetworkConfig(vpc, cacheSecurityGroup);
 
         // =========================================================================
         // 4. Layer de Dependências Original Preservada
@@ -132,18 +147,19 @@ public class ProductApiStack extends Stack {
                 .removalPolicy(RemovalPolicy.RETAIN)
                 .code(Code.fromAsset("lambda_layer"))
                 .compatibleRuntimes(List.of(Runtime.PYTHON_3_12))
-                .description("Camada contendo Pydantic v2 e utilitário compartilhados.")
+                .description("Camada contendo Pydantic v2 e utilitários compartilhados.")
                 .build();
 
-        // Mapa de variáveis de ambiente adicionais para S3 e Cache Valkey
+        // Mapa de variáveis de ambiente para S3, Cache Redis e SSM
         final Map<String, String> cacheAndS3Env = Map.of(
                 BUCKET_NAME_ENV, assetsBucket.getBucketName(),
-                VALKEY_HOST_ENV, valkeyCache.getAttrRedisEndpointAddress(),
-                VALKEY_PORT_ENV, valkeyCache.getAttrRedisEndpointPort()
+                REDIS_HOST_ENV, redisCache.getAttrRedisEndpointAddress(),
+                REDIS_PORT_ENV, redisCache.getAttrRedisEndpointPort(),
+                SSM_CONFIG_PREFIX_ENV, ssmPrefixPath
         );
 
         // =========================================================================
-        // 5. Instanciação das Lambdas Principais usando o seu padrão createPythonLambda
+        // 5. Instanciação das Lambdas Principais usando createPythonLambda
         // =========================================================================
         final Function queryProducts = createPythonLambda(
                 "QueryProducts",
@@ -151,8 +167,7 @@ public class ProductApiStack extends Stack {
                 productsTable,
                 dependencyLayer,
                 false,
-                vpc,
-                cacheSecurityGroup,
+                networkConfig,
                 cacheAndS3Env
         );
         queryProducts.addEnvironment("CATEGORY_GSI_NAME", CATEGORY_GSI_NAME);
@@ -163,8 +178,7 @@ public class ProductApiStack extends Stack {
                 productsTable,
                 dependencyLayer,
                 false,
-                vpc,
-                cacheSecurityGroup,
+                networkConfig,
                 cacheAndS3Env
         );
 
@@ -174,8 +188,7 @@ public class ProductApiStack extends Stack {
                 productsTable,
                 dependencyLayer,
                 true,
-                vpc,
-                cacheSecurityGroup,
+                networkConfig,
                 cacheAndS3Env
         );
 
@@ -185,8 +198,7 @@ public class ProductApiStack extends Stack {
                 productsTable,
                 dependencyLayer,
                 true,
-                vpc,
-                cacheSecurityGroup,
+                networkConfig,
                 cacheAndS3Env
         );
 
@@ -199,7 +211,6 @@ public class ProductApiStack extends Stack {
                 productsTable,
                 dependencyLayer,
                 false,
-                null, // Não exige VPC pois apenas assina a URL do S3
                 null,
                 cacheAndS3Env
         );
@@ -210,21 +221,51 @@ public class ProductApiStack extends Stack {
                 "handlers.process_image_metadata.handler",
                 productsTable,
                 dependencyLayer,
-                true, // Writable para atualizar o DynamoDB com os metadados da imagem
-                null,
+                true,
                 null,
                 cacheAndS3Env
         );
         assetsBucket.grantRead(processImageMetadata);
 
-        // Gatilho do S3 para invocar a Lambda reativa no evento de upload
         processImageMetadata.addEventSource(S3EventSource.Builder.create(assetsBucket)
                 .events(List.of(EventType.OBJECT_CREATED))
                 .filters(List.of(NotificationKeyFilter.builder().prefix("products/").build()))
                 .build());
 
         // =========================================================================
-        // 7. API Gateway RestApi Original Preservada
+        // 7. AWS SYSTEMS MANAGER (SSM) PARAMETER STORE - PARÂMETROS DE CONFIGURAÇÃO
+        // =========================================================================
+        final StringParameter apiTimeoutParam = StringParameter.Builder.create(this, "ApiTimeoutParam")
+                .parameterName(ssmPrefixPath + "/api_timeout")
+                .stringValue("5")
+                .description("Timeout padrão em segundos para integrações de serviços externos")
+                .build();
+
+        final StringParameter circuitThresholdParam = StringParameter.Builder.create(this, "CircuitThresholdParam")
+                .parameterName(ssmPrefixPath + "/circuit_breaker_threshold")
+                .stringValue("5")
+                .description("Limiar de falhas consecutivas para abertura do Circuit Breaker")
+                .build();
+
+        final StringParameter featureFlagImageParam = StringParameter.Builder.create(this, "FeatureFlagImageParam")
+                .parameterName(ssmPrefixPath + "/feature_flag_image_processing")
+                .stringValue("true")
+                .description("Feature Flag para ativacao do processamento de imagem")
+                .build();
+
+        final List<Function> allFunctions = List.of(
+                queryProducts, getProduct, insertProduct, updateProduct,
+                generateUploadUrl, processImageMetadata
+        );
+
+        for (Function fn : allFunctions) {
+            apiTimeoutParam.grantRead(fn);
+            circuitThresholdParam.grantRead(fn);
+            featureFlagImageParam.grantRead(fn);
+        }
+
+        // =========================================================================
+        // 8. API Gateway RestApi Original Preservada
         // =========================================================================
         final CorsOptions globalCorsOptions = CorsOptions.builder()
                 .allowOrigins(List.of("*"))
@@ -246,13 +287,12 @@ public class ProductApiStack extends Stack {
         productByIdResource.addMethod("GET", new LambdaIntegration(getProduct));
         productByIdResource.addMethod("PATCH", new LambdaIntegration(updateProduct));
 
-        // Nova Rota para obtenção da URL Pré-assinada de Upload de Foto
         final IResource uploadUrlResource = productByIdResource.addResource("upload-url");
         uploadUrlResource.addMethod("POST", new LambdaIntegration(generateUploadUrl));
     }
 
     // =========================================================================
-    // Metodo Auxiliar createPythonLambda Expandido sem quebrar a assinatura
+    // Metodo Auxiliar createPythonLambda (Máximo de 7 parâmetros - SonarQube S107 OK)
     // =========================================================================
     private Function createPythonLambda(
             final String id,
@@ -260,8 +300,7 @@ public class ProductApiStack extends Stack {
             final Table table,
             final ILayerVersion layer,
             final boolean isWritable,
-            final Vpc vpc,
-            final SecurityGroup securityGroup,
+            final LambdaNetworkConfig networkConfig,
             final Map<String, String> extraEnvVars
     ) {
         final Function.Builder builder = Function.Builder.create(this, id)
@@ -270,11 +309,10 @@ public class ProductApiStack extends Stack {
                 .code(Code.fromAsset("lambda_code"))
                 .layers(List.of(layer));
 
-        // Se a Lambda precisar acessar o Valkey/ElastiCache, associa à VPC e Security Group
-        if (vpc != null && securityGroup != null) {
-            builder.vpc(vpc)
+        if (networkConfig != null && networkConfig.vpc() != null && networkConfig.securityGroup() != null) {
+            builder.vpc(networkConfig.vpc())
                     .vpcSubnets(SubnetSelection.builder().subnetType(SubnetType.PRIVATE_WITH_EGRESS).build())
-                    .securityGroups(List.of(securityGroup));
+                    .securityGroups(List.of(networkConfig.securityGroup()));
         }
 
         final Function function = builder.build();

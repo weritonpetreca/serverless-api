@@ -16,8 +16,8 @@ class CacheRepository:
     """
 
     def __init__(self) -> None:
-        self.host = os.environ.get("VALKEY_HOST", "localhost")
-        self.port = int(os.environ.get("VALKEY_PORT", "6379"))
+        self.host = os.environ.get("REDIS_HOST", "localhost")
+        self.port = int(os.environ.get("REDIS_PORT", "6379"))
 
         try:
             self.client = redis.Redis(
@@ -41,12 +41,12 @@ class CacheRepository:
         try:
             data = self.client.get(key)
             if data:
-                logger.info(f"⚡ [CACHE HIT] Dado localizado no Valkey para a chave: {key}")
+                logger.info(f"⚡ [CACHE HIT] Dado localizado no Redis para a chave: {key}")
                 return json.loads(data)
-            logger.info(f"🐢 [CACHE MISS] Dado não encontrado no Valkey para a chave: {key}")
+            logger.info(f"🐢 [CACHE MISS] Dado não encontrado no Redis para a chave: {key}")
             return None
         except redis.RedisError as e:
-            logger.warning(f"Erro ao buscar chave '{key}' no Valkey: {str(e)}. Executando fallback para o DynamoDB.")
+            logger.warning(f"Erro ao buscar chave '{key}' no Redis: {str(e)}. Executando fallback para o DynamoDB.")
             return None
 
     def set_json(self, key: str, value: Any, ttl_seconds: int = 3600) -> None:
@@ -57,10 +57,10 @@ class CacheRepository:
             return
         try:
             serialized_data = json.dumps(value, default=decimal_serializer)
-            self.client.setex(name=key, time=ttl_seconds, value=serialized_data)
-            logger.info(f"Gravação no Valkey concluída com sucesso. Chave: '{key}' (TTL: {ttl_seconds}s)")
+            self.client.set(name=key, ex=ttl_seconds, value=serialized_data)
+            logger.info(f"Gravação no Redis concluída com sucesso. Chave: '{key}' (TTL: {ttl_seconds}s)")
         except redis.RedisError as e:
-            logger.warning(f"Erro ao salvar chave '{key}' no cache Valkey: {str(e)}.")
+            logger.warning(f"Erro ao salvar chave '{key}' no cache Redis: {str(e)}.")
 
     def delete(self, key: str) -> None:
         """
@@ -72,4 +72,4 @@ class CacheRepository:
             self.client.delete(key)
             logger.info(f"Invalidação de cache executada. Chave removida: '{key}'")
         except redis.RedisError as e:
-            logger.warning(f"Erro ao deletar chave '{key}' no cache Valkey: {str(e)}.")
+            logger.warning(f"Erro ao deletar chave '{key}' no cache Redis: {str(e)}.")
