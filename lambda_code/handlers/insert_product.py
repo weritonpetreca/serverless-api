@@ -4,6 +4,7 @@ import uuid
 from pydantic import ValidationError as PydanticValidationError
 from shared.error_handler import ErrorClassifier, ValidationError as DomainValidationError
 from shared.config_manager import SSMParameterManager
+from shared.event_publisher import EventPublisher
 from shared.response_utils import create_success_response
 from repository.products_db import ProductsRepository
 from domain.product_schema import ProductInput
@@ -14,6 +15,7 @@ logger.setLevel(logging.INFO)
 # Inicialização dos objetos no escopo global para reaproveitamento em Warm Starts
 repository = ProductsRepository()
 config_manager = SSMParameterManager(ttl_seconds=300)
+event_publisher = EventPublisher()
 
 
 def handler(event, context):
@@ -49,6 +51,26 @@ def handler(event, context):
         product_to_save["id"] = str(uuid.uuid4())
 
         repository.save(product_to_save)
+
+        try:
+            order_detail = {
+                "order_id": f"ord_{product_to_save['id'][:8]}",
+                "customer_id": "cust_catalog_admin",
+                "customer_email": "admin@ecommerce.com",
+                "customer_tier": "vip",
+                "order_type": "express",
+                "total_amount": float(product_to_save.get("price", 0.0)),
+                "items": [
+                    {
+                        "product_id": product_to_save["id"],
+                        "quantity": 1,
+                        "price": float(product_to_save.get("price", 0.0))
+                    }
+                ]
+            }
+            event_publisher.publish_order_placed(order_detail)
+        except Exception:
+            logger.exception("Falha não-bloqueante ao publicar evento no EventBridge. O produto foi salvo no DynamoDB.")
 
         logger.info(f"Produto persistido com sucesso! ID gerado: {product_to_save['id']}")
         return create_success_response(201, product_to_save)

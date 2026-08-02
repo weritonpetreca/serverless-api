@@ -3,132 +3,184 @@ import pytest
 from handlers.insert_product import handler
 from utils.event_factory import APIGatewayEventFactory
 
+
 @pytest.fixture
 def mock_repo(mocker):
+    """Fixture local que intercepta o repositório importado no handler."""
+    return mocker.patch("handlers.insert_product.repository")
+
+
+@pytest.fixture(autouse=True)
+def mock_ssm_and_publisher(mocker):
     """
-    Fixture local que intercepta o repositório importado no handler.
-    O pytest-mock (mocker) garante que o mock seja resetado a cada teste.
+    Fixture automática (autouse=True) que simula o SSM Feature Flag como ATIVO
+    e o EventPublisher ativado para todos os testes desta classe.
     """
-    return mocker.patch('handlers.insert_product.repository')
+    mock_ssm = mocker.patch("handlers.insert_product.config_manager")
+    mock_ssm.is_feature_enabled.return_value = True
 
-def test_insert_product_success(mock_repo, mock_context):
-    """
-    Testa o cenário de sucesso na criação de um produto.
-    Verifica se o status 201 é retornado, se um ID (UUID) foi gerado
-    e se o method de persistência do repositório foi chamado.
-    """
-    mock_event = APIGatewayEventFactory.create_post_event({
-        "title": "Espada de Aço de Kaer Morhen",
-        "category": "Home",
-        "description": "Lâmina forjada em aço de meteorito, ideal contra humanos.",
-        "price": 450.00
-    })
-    mock_context.aws_request_id = "req-insert-201-success"
-
-    response = handler(mock_event, mock_context)
-
-    assert response["statusCode"] == 201
-    body = json.loads(response["body"])
-    assert "id" in body
-    assert body["title"] == "Espada de Aço de Kaer Morhen"
-    assert body["price"] == 450.00
-    mock_repo.save.assert_called_once_with(body)
+    mock_pub = mocker.patch("handlers.insert_product.event_publisher")
+    mock_pub.publish_order_placed.return_value = "evt_test_123"
+    return {"ssm": mock_ssm, "publisher": mock_pub}
 
 
-def test_insert_product_validation_error_price(mock_repo, mock_context):
-    """
-    Testa o fluxo de falha de validação de esquema (Preço negativo).
-    Verifica se a Lambda barra com HTTP 400 estruturado de acordo com a ADR 0003.
-    """
-    mock_event = APIGatewayEventFactory.create_post_event({
-        "title": "Poção de Andorinha",
-        "category": "Home",
-        "description": "Acelera a regeneração de vida.",
-        "price": -10.00
-    })
-    mock_context.aws_request_id = "req-insert-400-price"
+class TestInsertProductHandler:
 
-    response = handler(mock_event, mock_context)
+    def test_insert_product_success(self, mock_repo, mock_context):
+        """
+        Testa o cenário de sucesso na criação de um produto.
+        Verifica se o status 201 é retornado, se um ID (UUID) foi gerado
+        e se o método de persistência do repositório foi chamado.
+        """
+        mock_event = APIGatewayEventFactory.create_post_event({
+            "title": "Espada de Aço de Kaer Morhen",
+            "category": "Home",
+            "description": "Lâmina forjada em aço de meteorito, ideal contra humanos.",
+            "price": 450.00
+        })
+        mock_context.aws_request_id = "req-insert-201-success"
 
-    assert response["statusCode"] == 400
-    body = json.loads(response["body"])
+        response = handler(mock_event, mock_context)
 
-    assert "error" in body
-    assert body["error"]["type"] == "validation_error"
-    assert body["error"]["request_id"] == "req-insert-400-price"
-    assert "timestamp" in body["error"]
-    assert "suggestions" in body["error"]
+        assert response["statusCode"] == 201
+        body = json.loads(response["body"])
+        assert "id" in body
+        assert body["title"] == "Espada de Aço de Kaer Morhen"
+        assert body["price"] == 450.00
+        mock_repo.save.assert_called_once_with(body)
 
-    assert "price" in body["error"]["message"].lower()
-    mock_repo.save.assert_not_called()
+    def test_insert_product_disabled_by_feature_flag(self, mock_repo, mock_context, mocker):
+        """
+        Cenário: Tentativa de cadastro quando a Feature Flag no SSM está desativada.
+        Esperado: Retorno HTTP 400 avisando sobre manutenção.
+        """
+        mock_ssm = mocker.patch("handlers.insert_product.config_manager")
+        mock_ssm.is_feature_enabled.return_value = False
 
+        mock_event = APIGatewayEventFactory.create_post_event({
+            "title": "Espada de Prata",
+            "category": "Home",
+            "description": "Ideal contra monstros.",
+            "price": 600.00
+        })
 
-def test_insert_product_empty_body(mock_repo, mock_context):
-    """
-    Garante retorno HTTP 400 estruturado quando o corpo da requisição
-    estiver totalmente vazio ou ausente (DomainValidationError).
-    """
-    mock_event = APIGatewayEventFactory.create_post_event({})
-    mock_context.aws_request_id = "req-insert-400-empty"
+        response = handler(mock_event, mock_context)
 
-    response = handler(mock_event, mock_context)
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
+        assert "manutenção" in body["error"]["message"]
+        mock_repo.save.assert_not_called()
 
-    assert response["statusCode"] == 400
-    body = json.loads(response["body"])
+    def test_insert_product_validation_error_price(self, mock_repo, mock_context):
+        """
+        Testa o fluxo de falha de validação de esquema (Preço negativo).
+        Verifica se a Lambda barra com HTTP 400 estruturado de acordo com a ADR 0003.
+        """
+        mock_event = APIGatewayEventFactory.create_post_event({
+            "title": "Poção de Andorinha",
+            "category": "Home",
+            "description": "Acelera a regeneração de vida.",
+            "price": -10.00
+        })
+        mock_context.aws_request_id = "req-insert-400-price"
 
-    assert "error" in body
-    assert body["error"]["type"] == "validation_error"
-    assert "vazio ou ausente" in body["error"]["message"]
-    assert body["error"]["request_id"] == "req-insert-400-empty"
-    mock_repo.save.assert_not_called()
+        response = handler(mock_event, mock_context)
 
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
 
-def test_handler_should_return_structured_400_when_payload_has_invalid_category(mock_repo, mock_context):
-    """
-    Cenário: Envio de um payload de produto com uma categoria não permitida no itinerário.
-    Esperado: Resposta HTTP 400 contendo o contrato JSON estrito da ADR 0003.
-    """
-    invalid_body = {
-        "title": "Poção de Raio",
-        "category": "CategoriaInvalidaDeMonstros",
-        "description": "Aumenta a velocidade dos reflexos do Bruxo",
-        "price": 150.50
-    }
-    mock_event = APIGatewayEventFactory.create_post_event(invalid_body)
-    mock_context.aws_request_id = "req-insert-400-category"
+        assert "error" in body
+        assert body["error"]["type"] == "validation_error"
+        assert body["error"]["request_id"] == "req-insert-400-price"
+        assert "timestamp" in body["error"]
+        assert "suggestions" in body["error"]
+        assert "price" in body["error"]["message"].lower()
+        mock_repo.save.assert_not_called()
 
-    response = handler(mock_event, mock_context)
+    def test_insert_product_empty_body(self, mock_repo, mock_context):
+        """
+        Garante retorno HTTP 400 estruturado quando o corpo da requisição
+        estiver totalmente vazio ou ausente (DomainValidationError).
+        """
+        mock_event = APIGatewayEventFactory.create_post_event({})
+        mock_context.aws_request_id = "req-insert-400-empty"
 
-    assert response["statusCode"] == 400
-    assert response["headers"]["Content-Type"] == "application/json"
+        response = handler(mock_event, mock_context)
 
-    body = json.loads(response["body"])
-    assert "error" in body
-    assert body["error"]["type"] == "validation_error"
-    assert body["error"]["request_id"] == "req-insert-400-category"
-    assert "timestamp" in body["error"]
-    assert "suggestions" in body["error"]
-    mock_repo.save.assert_not_called()
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
 
+        assert "error" in body
+        assert body["error"]["type"] == "validation_error"
+        assert "vazio ou ausente" in body["error"]["message"]
+        assert body["error"]["request_id"] == "req-insert-400-empty"
+        mock_repo.save.assert_not_called()
 
-def test_insert_product_invalid_json_syntax(mock_repo, mock_context):
-    """
-    Cenário: Envio de uma string que não consegue ser parseada como JSON (Ex: aspas faltando).
-    Esperado: Captura de json.JSONDecodeError e conversão em HTTP 400 ValidationError.
-    """
-    mock_event = {
-        "httpMethod": "POST",
-        "body": "{'title': Espada Incompleta, 'price': 100"
-    }
-    mock_context.aws_request_id = "req-insert-400-syntax"
+    def test_handler_should_return_structured_400_when_payload_has_invalid_category(self, mock_repo, mock_context):
+        """
+        Cenário: Envio de um payload de produto com uma categoria não permitida.
+        Esperado: Resposta HTTP 400 contendo o contrato JSON estrito da ADR 0003.
+        """
+        invalid_body = {
+            "title": "Poção de Raio",
+            "category": "CategoriaInvalidaDeMonstros",
+            "description": "Aumenta a velocidade dos reflexos do Bruxo",
+            "price": 150.50
+        }
+        mock_event = APIGatewayEventFactory.create_post_event(invalid_body)
+        mock_context.aws_request_id = "req-insert-400-category"
 
-    response = handler(mock_event, mock_context)
+        response = handler(mock_event, mock_context)
 
-    assert response["statusCode"] == 400
-    body = json.loads(response["body"])
+        assert response["statusCode"] == 400
+        assert response["headers"]["Content-Type"] == "application/json"
 
-    assert "error" in body
-    assert body["error"]["type"] == "validation_error"
-    assert "Formato JSON inválido" in body["error"]["message"]
-    assert body["error"]["request_id"] == "req-insert-400-syntax"
-    mock_repo.save.assert_not_called()
+        body = json.loads(response["body"])
+        assert "error" in body
+        assert body["error"]["type"] == "validation_error"
+        assert body["error"]["request_id"] == "req-insert-400-category"
+        assert "timestamp" in body["error"]
+        assert "suggestions" in body["error"]
+        mock_repo.save.assert_not_called()
+
+    def test_insert_product_invalid_json_syntax(self, mock_repo, mock_context):
+        """
+        Cenário: Envio de uma string que não consegue ser parseada como JSON.
+        Esperado: Captura de json.JSONDecodeError e conversão em HTTP 400.
+        """
+        mock_event = {
+            "httpMethod": "POST",
+            "body": "{'title': Espada Incompleta, 'price': 100"
+        }
+        mock_context.aws_request_id = "req-insert-400-syntax"
+
+        response = handler(mock_event, mock_context)
+
+        assert response["statusCode"] == 400
+        body = json.loads(response["body"])
+
+        assert "error" in body
+        assert body["error"]["type"] == "validation_error"
+        assert "Formato JSON inválido" in body["error"]["message"]
+        assert body["error"]["request_id"] == "req-insert-400-syntax"
+        mock_repo.save.assert_not_called()
+
+    def test_insert_product_success_even_if_event_publisher_fails(self, mock_repo, mock_context, mocker):
+        """
+        Cenário: Testa que se o EventBridge falhar, o produto AINDA É SALVO com sucesso no DynamoDB (Non-blocking).
+        """
+        mock_publisher = mocker.patch("handlers.insert_product.event_publisher")
+        mock_publisher.publish_order_placed.side_effect = RuntimeError("EventBridge Throttled")
+
+        mock_event = APIGatewayEventFactory.create_post_event({
+            "title": "Armadura da Escola do Gato",
+            "category": "Home",
+            "description": "Armadura leve de couro batido.",
+            "price": 800.00
+        })
+
+        response = handler(mock_event, mock_context)
+
+        # O produto é salvo no DynamoDB com sucesso (HTTP 201) apesar da falha do EventBridge
+        assert response["statusCode"] == 201
+        mock_repo.save.assert_called_once()

@@ -1,26 +1,26 @@
 import json
 from decimal import Decimal
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
 
 def decimal_serializer(obj: Any) -> Any:
     """
     Serializador customizado para objetos do tipo Decimal.
-
-    O DynamoDB retorna números (como preços e contadores) utilizando o tipo Decimal
-    para evitar perda de precisão de ponto flutuante. Como o interpretador JSON nativo
-    do Python não sabe serializar Deciamls, esta função intercepta esses tipos e os
-    converte de forma segura antes da transmissão HTTP.
+    Converte Decimals do DynamoDB para int ou float de forma segura.
     """
     if isinstance(obj, Decimal):
         if obj % 1 == 0:
             return int(obj)
         return float(obj)
-    raise TypeError(f"O objeto do tupo {type(obj)} não é serializável em JSON.")
+    if isinstance(obj, Exception):
+        return str(obj)
+    raise TypeError(f"O objeto do tipo {type(obj)} não é serializável em JSON.")
 
-def create_api_response(status_code:int, body_data: Any) -> Dict[str, Any]:
+
+def create_api_response(status_code: int, body_data: Any) -> Dict[str, Any]:
     """
     Formata uma resposta padrão para o formato exigido pelo AWS API Gateway Integration Proxy.
-
     Aplica os cabeçalhos de segurança CORS necessários e serializa o corpo da mensagem.
     """
     return {
@@ -34,6 +34,36 @@ def create_api_response(status_code:int, body_data: Any) -> Dict[str, Any]:
         "body": json.dumps(body_data, default=decimal_serializer)
     }
 
+
 def create_success_response(status_code: int, data: Any) -> Dict[str, Any]:
-    """Gera um envelope de resposta de sucesso (200 OK, 201 Created, etc)"""
+    """Gera um envelope de resposta de sucesso (200 OK, 201 Created, etc)."""
     return create_api_response(status_code, data)
+
+
+def create_error_response(
+        status_code: int,
+        error_type: str,
+        message: str,
+        request_id: str,
+        details: Optional[Dict[str, Any]] = None,
+        suggestions: Optional[List[str]] = None,
+        timestamp: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Fábrica unificada para geração de envelopes de erro padronizados (ADR 0003).
+    Elimina duplicidade de criação de dicionários de erro em todo o projeto.
+    """
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    error_payload = {
+        "error": {
+            "type": error_type,
+            "message": message,
+            "timestamp": timestamp,
+            "request_id": request_id,
+            "details": details or {},
+            "suggestions": suggestions or []
+        }
+    }
+    return create_api_response(status_code, error_payload)
