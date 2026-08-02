@@ -9,10 +9,18 @@ import software.amazon.awscdk.services.dynamodb.*;
 import software.amazon.awscdk.services.ec2.*;
 import software.amazon.awscdk.services.elasticache.CfnCacheCluster;
 import software.amazon.awscdk.services.elasticache.CfnSubnetGroup;
+import software.amazon.awscdk.services.events.EventBus;
+import software.amazon.awscdk.services.events.EventPattern;
+import software.amazon.awscdk.services.events.Rule;
+import software.amazon.awscdk.services.events.targets.SqsQueue;
 import software.amazon.awscdk.services.lambda.*;
 import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.lambda.eventsources.S3EventSource;
+import software.amazon.awscdk.services.lambda.eventsources.SqsEventSource;
 import software.amazon.awscdk.services.s3.*;
+import software.amazon.awscdk.services.sns.Topic;
+import software.amazon.awscdk.services.sqs.DeadLetterQueue;
+import software.amazon.awscdk.services.sqs.Queue;
 import software.amazon.awscdk.services.ssm.StringParameter;
 import software.constructs.Construct;
 
@@ -25,12 +33,10 @@ public class ProductApiStack extends Stack {
     private static final String TABLE_NAME_ENV = "PRODUCTS_TABLE_NAME";
     private static final String CATEGORY_GSI_NAME = "category-index";
 
-    // Constantes para S3 e ElastiCache Redis
+    // Constantes para S3, ElastiCache Redis e SSM
     private static final String BUCKET_NAME_ENV = "PRODUCT_IMAGE_BUCKET";
     private static final String REDIS_HOST_ENV = "REDIS_HOST";
     private static final String REDIS_PORT_ENV = "REDIS_PORT";
-
-    // Constante para a variável de ambiente do prefixo SSM
     private static final String SSM_CONFIG_PREFIX_ENV = "SSM_CONFIG_PREFIX";
 
     // Record Java 21 para encapsular a rede da Lambda (SonarQube S107 Fix - Max 7 Params)
@@ -140,7 +146,55 @@ public class ProductApiStack extends Stack {
         final LambdaNetworkConfig networkConfig = new LambdaNetworkConfig(vpc, cacheSecurityGroup);
 
         // =========================================================================
-        // 4. Layer de Dependências Original Preservada
+        // 4. MENSAGERIA & EVENTOS (EVENTBRIDGE, SQS, DLQ & SNS)
+        // =========================================================================
+
+        // 4.1. Amazon EventBridge - Barramento Customizado de Eventos
+        final EventBus storeEventBus = EventBus.Builder.create(this, "StoreEventBus")
+                .eventBusName("online-store-events")
+                .build();
+
+        // 4.2. Amazon SQS - Fila de Mensagens Mortas (Dead Letter Queue - DLQ)
+        final Queue orderDlq = Queue.Builder.create(this, "OrderProcessingDlq")
+                .queueName("order-processing-dlq")
+                .retentionPeriod(Duration.days(14))
+                .visibilityTimeout(Duration.seconds(60))
+                .build();
+
+        // 4.3. Amazon SQS - Fila Principal de Processamento de Pedidos (Com Long Polling e DLQ)
+        final Queue orderQueue = Queue.Builder.create(this, "OrderProcessingQueue")
+                .queueName("order-processing-queue")
+                .visibilityTimeout(Duration.seconds(300)) // 5 minutos para workers
+                .retentionPeriod(Duration.days(14))
+                .receiveMessageWaitTime(Duration.seconds(20)) // FinOps: Long Polling Ativado
+                .deadLetterQueue(DeadLetterQueue.builder()
+                        .queue(orderDlq)
+                        .maxReceiveCount(3) // Redrive para DLQ após 3 falhas
+                        .build())
+                .build();
+
+        // 4.4. Amazon SNS - Tópico de Notificações Multicanal
+        final Topic customerNotificationTopic = Topic.Builder.create(this, "CustomerNotificationTopic")
+                .topicName("customer-notifications-topic")
+                .displayName("Notificações de Clientes do E-commerce")
+                .build();
+
+        // 4.5. Amazon EventBridge Rule - Roteamento para a Fila SQS
+        final Rule orderProcessingRule = Rule.Builder.create(this, "OrderProcessingRule")
+                .ruleName("order-processing-rule")
+                .eventBus(storeEventBus)
+                .description("Roteia eventos de pedidos criados para a fila SQS de processamento")
+                .eventPattern(EventPattern.builder()
+                        .source(List.of("store.orders"))
+                        .detailType(List.of("Order Placed"))
+                        .build())
+                .build();
+
+        // Associa a Fila SQS como Alvo (Target) da Regra do EventBridge via SqsQueue
+        orderProcessingRule.addTarget(new SqsQueue(orderQueue));
+
+        // =========================================================================
+        // 5. Layer de Dependências e Variáveis de Ambiente
         // =========================================================================
         final ILayerVersion dependencyLayer = LayerVersion.Builder.create(this, "AppDependencyLayer")
                 .layerVersionName("ProductApiDeps")
@@ -150,16 +204,18 @@ public class ProductApiStack extends Stack {
                 .description("Camada contendo Pydantic v2 e utilitários compartilhados.")
                 .build();
 
-        // Mapa de variáveis de ambiente para S3, Cache Redis e SSM
-        final Map<String, String> cacheAndS3Env = Map.of(
+        // Mapa estendido de variáveis de ambiente
+        final Map<String, String> commonEnvVars = Map.of(
                 BUCKET_NAME_ENV, assetsBucket.getBucketName(),
                 REDIS_HOST_ENV, redisCache.getAttrRedisEndpointAddress(),
                 REDIS_PORT_ENV, redisCache.getAttrRedisEndpointPort(),
-                SSM_CONFIG_PREFIX_ENV, ssmPrefixPath
+                SSM_CONFIG_PREFIX_ENV, ssmPrefixPath,
+                "EVENT_BUS_NAME", storeEventBus.getEventBusName(),
+                "CUSTOMER_NOTIFICATION_TOPIC", customerNotificationTopic.getTopicArn()
         );
 
         // =========================================================================
-        // 5. Instanciação das Lambdas Principais usando createPythonLambda
+        // 6. Instanciação das Lambdas Principais
         // =========================================================================
         final Function queryProducts = createPythonLambda(
                 "QueryProducts",
@@ -168,7 +224,7 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 false,
                 networkConfig,
-                cacheAndS3Env
+                commonEnvVars
         );
         queryProducts.addEnvironment("CATEGORY_GSI_NAME", CATEGORY_GSI_NAME);
 
@@ -179,7 +235,7 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 false,
                 networkConfig,
-                cacheAndS3Env
+                commonEnvVars
         );
 
         final Function insertProduct = createPythonLambda(
@@ -189,7 +245,7 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 true,
                 networkConfig,
-                cacheAndS3Env
+                commonEnvVars
         );
 
         final Function updateProduct = createPythonLambda(
@@ -199,12 +255,10 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 true,
                 networkConfig,
-                cacheAndS3Env
+                commonEnvVars
         );
 
-        // =========================================================================
-        // 6. Novas Lambdas para o S3 (Upload Pré-assinado e Processamento Reativo)
-        // =========================================================================
+        // Lambdas para S3
         final Function generateUploadUrl = createPythonLambda(
                 "GenerateUploadUrl",
                 "handlers.generate_upload_url.handler",
@@ -212,7 +266,7 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 false,
                 null,
-                cacheAndS3Env
+                commonEnvVars
         );
         assetsBucket.grantReadWrite(generateUploadUrl);
 
@@ -223,7 +277,7 @@ public class ProductApiStack extends Stack {
                 dependencyLayer,
                 true,
                 null,
-                cacheAndS3Env
+                commonEnvVars
         );
         assetsBucket.grantRead(processImageMetadata);
 
@@ -233,7 +287,33 @@ public class ProductApiStack extends Stack {
                 .build());
 
         // =========================================================================
-        // 7. AWS SYSTEMS MANAGER (SSM) PARAMETER STORE - PARÂMETROS DE CONFIGURAÇÃO
+        // 7. NOVA LAMBDA WORKER: Processamento de Pedidos acionada por SQS
+        // =========================================================================
+        final Function orderProcessorWorker = createPythonLambda(
+                "OrderProcessorWorker",
+                "handlers.order_processor.handler",
+                productsTable,
+                dependencyLayer,
+                true,
+                networkConfig,
+                commonEnvVars
+        );
+
+        // Associa o Gatilho de Origem de Eventos do SQS à Lambda Worker
+        orderProcessorWorker.addEventSource(SqsEventSource.Builder.create(orderQueue)
+                .batchSize(10)
+                .maxBatchingWindow(Duration.seconds(5))
+                .build());
+
+        // =========================================================================
+        // 8. PERMISSÕES IAM MENOR PRIVILÉGIO (EVENTBRIDGE, SNS E SSM)
+        // =========================================================================
+        storeEventBus.grantPutEventsTo(insertProduct);
+        storeEventBus.grantPutEventsTo(updateProduct);
+        customerNotificationTopic.grantPublish(orderProcessorWorker);
+
+        // =========================================================================
+        // 9. AWS SYSTEMS MANAGER (SSM) PARAMETER STORE - PARÂMETROS DE CONFIGURAÇÃO
         // =========================================================================
         final StringParameter apiTimeoutParam = StringParameter.Builder.create(this, "ApiTimeoutParam")
                 .parameterName(ssmPrefixPath + "/api_timeout")
@@ -259,9 +339,27 @@ public class ProductApiStack extends Stack {
                 .description("Tempo de expiração em segundos para URLs pré-assinadas de upload no S3")
                 .build();
 
+        final StringParameter featureFlagOrderParam = StringParameter.Builder.create(this, "FeatureFlagOrderParam")
+                .parameterName(ssmPrefixPath + "/feature_flag_order_processing")
+                .stringValue("true")
+                .description("Feature Flag para controle do processamento assíncrono de pedidos")
+                .build();
+
+        final StringParameter cacheTtlProductParam = StringParameter.Builder.create(this, "CacheTtlProductParam")
+                .parameterName(ssmPrefixPath + "/cache_ttl_product")
+                .stringValue("3600")
+                .description("TTL de cache para detalhes de produto no ElastiCache")
+                .build();
+
+        final StringParameter cacheTtlCategoryParam = StringParameter.Builder.create(this, "CacheTtlCategoryParam")
+                .parameterName(ssmPrefixPath + "/cache_ttl_category")
+                .stringValue("1800")
+                .description("TTL de cache para listas de categoria no ElastiCache")
+                .build();
+
         final List<Function> allFunctions = List.of(
                 queryProducts, getProduct, insertProduct, updateProduct,
-                generateUploadUrl, processImageMetadata
+                generateUploadUrl, processImageMetadata, orderProcessorWorker
         );
 
         for (Function fn : allFunctions) {
@@ -269,10 +367,13 @@ public class ProductApiStack extends Stack {
             circuitThresholdParam.grantRead(fn);
             featureFlagImageParam.grantRead(fn);
             s3UploadExpirationParam.grantRead(fn);
+            featureFlagOrderParam.grantRead(fn);
+            cacheTtlProductParam.grantRead(fn);
+            cacheTtlCategoryParam.grantRead(fn);
         }
 
         // =========================================================================
-        // 8. API Gateway RestApi Original Preservada
+        // 10. API Gateway RestApi Original Preservada
         // =========================================================================
         final CorsOptions globalCorsOptions = CorsOptions.builder()
                 .allowOrigins(List.of("*"))
@@ -299,7 +400,7 @@ public class ProductApiStack extends Stack {
     }
 
     // =========================================================================
-    // Metodo Auxiliar createPythonLambda (Máximo de 7 parâmetros - SonarQube S107 OK)
+    // Método Auxiliar createPythonLambda (Máximo de 7 parâmetros - SonarQube S107 OK)
     // =========================================================================
     private Function createPythonLambda(
             final String id,
