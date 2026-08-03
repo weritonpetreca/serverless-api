@@ -33,7 +33,7 @@ Conforme aplicações de e-commerce crescem, a execução síncrona (*blocking*)
 
 A arquitetura foi estendida para incorporar o desacoplamento assíncrono e roteamento inteligente:
 
-![AWS Serverless Product API Architecture v4](./architecture_v6.png)
+![AWS Serverless Product API Architecture v6](./architecture_v6.png)
 
 1. **Publicação Pós-Persistência no EventBridge (`shared/event_publisher.py`)**:
    Após salvar o item no DynamoDB, a API publica o evento de negócio `Order Placed` no barramento `online-store-events`.

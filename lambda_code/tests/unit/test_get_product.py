@@ -4,6 +4,7 @@ from handlers.get_product import handler
 from shared.error_handler import ProductNotFoundError
 from utils.event_factory import APIGatewayEventFactory
 
+
 @pytest.fixture
 def mock_repo(mocker):
     """
@@ -11,6 +12,15 @@ def mock_repo(mocker):
     O pytest-mock (mocker) garante que o mock seja resetado a cada teste.
     """
     return mocker.patch("handlers.get_product.repository")
+
+
+@pytest.fixture(autouse=True)
+def mock_stream_publisher(mocker):
+    """Fixture automática que intercepta o stream_publisher para todos os testes."""
+    mock_pub = mocker.patch("handlers.get_product.stream_publisher")
+    mock_pub.send_activity_batch.return_value = {"successful_count": 1, "failed_count": 0}
+    return mock_pub
+
 
 def test_get_product_success(mock_repo, mock_context):
     """Garante que busca por ID existente retorne o produto e HTTP 200."""
@@ -33,9 +43,9 @@ def test_get_product_success(mock_repo, mock_context):
     assert body["title"] == "Espada de Prata de Caçador"
     mock_repo.get_by_id.assert_called_once_with("prod-111")
 
+
 def test_get_product_missing_id(mock_repo, mock_context):
     """Garante retorno HTTP 400 caso o ID não seja enviado nos path parameters."""
-
     mock_event = APIGatewayEventFactory.create_get_event(product_id='')
 
     response = handler(mock_event, mock_context)
@@ -62,6 +72,7 @@ def test_get_product_internal_error(mock_repo, mock_context):
     assert body["error"]["type"] == "internal_server_error"
     assert "Erro interno do servidor" in body["error"]["message"]
 
+
 def test_handler_should_return_structured_404_when_product_not_found(mock_repo, mock_context):
     """
     Cenário: Busca por um ID de produto inexistente.
@@ -70,7 +81,6 @@ def test_handler_should_return_structured_404_when_product_not_found(mock_repo, 
     invalid_id = "prod_witcher_999"
 
     mock_event = APIGatewayEventFactory.create_get_event(product_id=invalid_id)
-
     mock_context.aws_request_id = "req-abc-123-xyz"
 
     mock_repo.get_by_id.side_effect = ProductNotFoundError(f"Product with ID {invalid_id} was not found.")

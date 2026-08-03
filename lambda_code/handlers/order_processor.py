@@ -8,6 +8,7 @@ from domain.event_schema import OrderPlacedEventDetail
 from repository.products_db import ProductsRepository
 from shared.config_manager import SSMParameterManager
 from shared.error_handler import OrderProcessingException, ProductNotFoundError
+from shared.stream_publisher import StreamPublisher
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,6 +17,7 @@ logger.setLevel(logging.INFO)
 sns_client = boto3.client("sns")
 repository = ProductsRepository()
 config_manager = SSMParameterManager(ttl_seconds=300)
+stream_publisher = StreamPublisher()
 
 
 def _validate_and_reserve_inventory_step(order_data: OrderPlacedEventDetail) -> Dict[str, Any]:
@@ -147,6 +149,21 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
             # 4. Notificação SNS
             _publish_sns_confirmation(order_data, topic_arn)
+
+            # 🚀 STREAMING EM TEMPO REAL: Dispara eventos de compra para o Amazon Data Firehose
+            try:
+                activity_records = []
+                for item in order_data.items:
+                    activity_records.append({
+                        "event_type": "purchase",
+                        "user_id": order_data.customer_id,
+                        "product_id": item.product_id,
+                        "price": float(item.price),
+                        "session_id": f"sess_{current_order_id[:8]}"
+                    })
+                stream_publisher.send_activity_batch(activity_records)
+            except Exception:
+                logger.exception("Falha não-bloqueante ao enviar evento de compra para o Firehose.")
 
             processed_count += 1
             logger.info(f"Pedido {current_order_id} processado com sucesso!")
