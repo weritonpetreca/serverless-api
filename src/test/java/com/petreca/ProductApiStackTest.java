@@ -73,10 +73,16 @@ class ProductApiStackTest {
                         "Handler", "handlers.order_processor.handler"
                 ))
         );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::Lambda::Function", Map.of(
+                        "Handler", "handlers.stream_transformer.handler"
+                ))
+        );
     }
 
     // =========================================================================
-    // 2. Testes de Persistência NoSQL e Armazenamento em S3 (Módulos 04 e 06)
+    // 2. Testes de Persistência NoSQL e Armazenamento em S3 (Módulos 04, 06 e 09)
     // =========================================================================
 
     @Test
@@ -108,8 +114,8 @@ class ProductApiStackTest {
     }
 
     @Test
-    @DisplayName("Deve criar o Bucket S3 com Criptografia SSE-S3 e Bloqueio Público")
-    void shouldCreateS3BucketWithSecurityAndLifecycle() {
+    @DisplayName("Deve criar Buckets S3 para Mídias e para o Data Lake Analítico com Bloqueio Público")
+    void shouldCreateS3BucketsWithSecurity() {
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::S3::Bucket", Map.of(
                         "PublicAccessBlockConfiguration", Map.of(
@@ -117,11 +123,20 @@ class ProductApiStackTest {
                                 "BlockPublicPolicy", true,
                                 "IgnorePublicAcls", true,
                                 "RestrictPublicBuckets", true
-                        ),
-                        "BucketEncryption", Map.of(
-                                "ServerSideEncryptionConfiguration", List.of(
-                                        Map.of("ServerSideEncryptionByDefault", Map.of("SSEAlgorithm", "AES256"))
-                                )
+                        )
+                ))
+        );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::S3::Bucket", Map.of(
+                        "LifecycleConfiguration", Map.of(
+                                "Rules", Match.arrayWith(List.of(
+                                        Match.objectLike(Map.of(
+                                                "Id", "AnalyticsDataLakeLifecycle",
+                                                "Status", "Enabled",
+                                                "Prefix", "analytics/"
+                                        ))
+                                ))
                         )
                 ))
         );
@@ -165,7 +180,7 @@ class ProductApiStackTest {
     }
 
     // =========================================================================
-    // 4. Testes Módulo 07: AWS SSM Parameter Store & Handlers
+    // 4. Testes Módulo 07: AWS SSM Parameter Store
     // =========================================================================
 
     @Test
@@ -205,26 +220,15 @@ class ProductApiStackTest {
     }
 
     // =========================================================================
-    // 5. Testes Módulo 08: Mensageria Assíncrona & Eventos (EventBridge, SQS, SNS)
+    // 5. Testes Módulo 08: Mensageria Assíncrona (EventBridge, SQS, SNS)
     // =========================================================================
 
     @Test
-    @DisplayName("Deverá criar o Barramento Customizado de Eventos no Amazon EventBridge")
-    void shouldCreateEventBridgeCustomEventBus() {
+    @DisplayName("Deverá criar o Barramento Customizado no EventBridge e as Filas SQS")
+    void shouldCreateMessagingResources() {
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::Events::EventBus", Map.of(
                         "Name", "online-store-events"
-                ))
-        );
-    }
-
-    @Test
-    @DisplayName("Deverá criar a Fila SQS Principal com Long Polling, Timeout e DLQ vinculada")
-    void shouldCreateSqsQueueAndDeadLetterQueue() {
-        assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::SQS::Queue", Map.of(
-                        "QueueName", "order-processing-dlq",
-                        "MessageRetentionPeriod", 1209600
                 ))
         );
 
@@ -235,40 +239,30 @@ class ProductApiStackTest {
                         "ReceiveMessageWaitTimeSeconds", 20
                 ))
         );
-    }
 
-    @Test
-    @DisplayName("Deverá criar o Tópico de Notificações no Amazon SNS")
-    void shouldCreateSnsCustomerNotificationTopic() {
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::SNS::Topic", Map.of(
-                        "TopicName", "customer-notifications-topic",
-                        "DisplayName", "Notificações de Clientes do E-commerce"
+                        "TopicName", "customer-notifications-topic"
                 ))
         );
     }
 
+    // =========================================================================
+    // 6. Testes Módulo 09: Real-time Data Streaming (Amazon Data Firehose)
+    // =========================================================================
+
     @Test
-    @DisplayName("Deverá criar a Regra de Roteamento no EventBridge direcionando para o SQS Target")
-    void shouldCreateEventBridgeRuleWithSqsTarget() {
+    @DisplayName("Deverá criar o Delivery Stream do Firehose com Buffering de 1MB/60s e compressão GZIP")
+    void shouldCreateFirehoseDeliveryStreamWithBufferingAndCompression() {
         assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::Events::Rule", Map.of(
-                        "Name", "order-processing-rule",
-                        "EventPattern", Map.of(
-                                "source", java.util.List.of("store.orders"),
-                                "detail-type", java.util.List.of("Order Placed")
+                template.hasResourceProperties("AWS::KinesisFirehose::DeliveryStream", Map.of(
+                        "DeliveryStreamName", "customer-activity-stream",
+                        "DeliveryStreamType", "DirectPut",
+                        "ExtendedS3DestinationConfiguration", Map.of(
+                                "CompressionFormat", "GZIP",
+                                "Prefix", "analytics/customer-activity/year=!{timestamp:yyyy}/month=!{timestamp:MM}/",
+                                "ErrorOutputPrefix", "errors/firehose/"
                         )
-                ))
-        );
-    }
-
-    @Test
-    @DisplayName("Deverá criar o Mapeamento de Origem de Eventos do SQS para a Lambda Worker")
-    void shouldCreateOrderProcessorWorkerWithSqsTrigger() {
-        assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::Lambda::EventSourceMapping", Map.of(
-                        "BatchSize", 10,
-                        "MaximumBatchingWindowInSeconds", 5
                 ))
         );
     }

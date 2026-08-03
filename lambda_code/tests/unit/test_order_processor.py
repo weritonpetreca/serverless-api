@@ -36,8 +36,16 @@ def sample_sqs_event():
     }
 
 
-def test_order_processor_success(sample_sqs_event, mocker):
-    """Cenário 1: Sucesso completo nas 3 etapas + notificação SNS."""
+@pytest.fixture(autouse=True)
+def mock_stream_publisher(mocker):
+    """Fixture automática que intercepta o stream_publisher para todos os testes."""
+    mock_pub = mocker.patch("handlers.order_processor.stream_publisher")
+    mock_pub.send_activity_batch.return_value = {"successful_count": 1, "failed_count": 0}
+    return mock_pub
+
+
+def test_order_processor_success(sample_sqs_event, mocker, mock_stream_publisher):
+    """Cenário 1: Sucesso completo nas 3 etapas + notificação SNS + envio ao Firehose."""
     mocker.patch("handlers.order_processor.sns_client.publish", return_value={"MessageId": "sns_msg_123"})
     mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
 
@@ -49,6 +57,7 @@ def test_order_processor_success(sample_sqs_event, mocker):
     assert response["statusCode"] == 200
     body = json.loads(response["body"])
     assert body["processed_count"] == 1
+    mock_stream_publisher.send_activity_batch.assert_called_once()
 
 
 def test_order_processor_disabled_by_feature_flag(sample_sqs_event, mocker):
@@ -119,6 +128,24 @@ def test_order_processor_handles_sns_publish_error_gracefully(sample_sqs_event, 
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
     mock_ssm.is_feature_enabled.return_value = True
+
+    response = handler(sample_sqs_event, None)
+
+    assert response["statusCode"] == 200
+    body = json.loads(response["body"])
+    assert body["processed_count"] == 1
+
+
+def test_order_processor_handles_stream_publisher_error_gracefully(sample_sqs_event, mocker):
+    """Cenário 7: Falha no Firehose registra log de exceção sem derrubar o pedido se concluído."""
+    mocker.patch("handlers.order_processor.sns_client.publish", return_value={"MessageId": "sns_msg_123"})
+    mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
+
+    mock_ssm = mocker.patch("handlers.order_processor.config_manager")
+    mock_ssm.is_feature_enabled.return_value = True
+
+    mock_pub = mocker.patch("handlers.order_processor.stream_publisher")
+    mock_pub.send_activity_batch.side_effect = RuntimeError("Firehose Throttled")
 
     response = handler(sample_sqs_event, None)
 

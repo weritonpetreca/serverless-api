@@ -3,11 +3,15 @@ import logging
 from repository.products_db import ProductsRepository
 from shared.response_utils import create_success_response
 from shared.error_handler import ErrorClassifier, ProductNotFoundError, ValidationError as DomainValidationError
+from shared.stream_publisher import StreamPublisher
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# Inicialização dos objetos no escopo global para reaproveitamento em Warm Starts
 repository = ProductsRepository()
+stream_publisher = StreamPublisher()
+
 
 def handler(event, context):
     """
@@ -16,9 +20,10 @@ def handler(event, context):
     Fluxo:
       1. Extrai o ID dos parâmetros de rota (pathParameters) fornecidos pelo API Gateway.
       2. Valida se o ID foi enviado corretamente.
-      3. Consulta o repositório do DynamoDB.
+      3. Consulta o repositório do DynamoDB/Cache.
       4. Se o item não for encontrado, retorna HTTP 404 (Not Found).
-      5. Se encontrado, retorna HTTP 200 (OK) com o payload do produto.
+      5. Se encontrado, dispara o evento de clickstream em tempo real para o Amazon Data Firehose.
+      6. Retorna HTTP 200 (OK) com o payload do produto.
     """
     logger.info(f"Iniciando processamento de busca de produto por ID. Evento: {json.dumps(event)}")
     request_id = context.aws_request_id if context else "fallback-local-id"
@@ -31,12 +36,25 @@ def handler(event, context):
             logger.warning("Requisição rejeitada: ID do produto ausente nos parâmetros de rota.")
             raise DomainValidationError("O parâmetro 'id' na URL é obrigatório.")
 
-
         logger.info(f"Buscando informações para o ID do produto: {product_id}")
         product = repository.get_by_id(product_id)
 
         if not product:
             raise ProductNotFoundError(f"Produto com ID {product_id} não foi encontrado.")
+
+        # 🚀 STREAMING EM TEMPO REAL: Dispara o evento de clickstream (product_view) para o Firehose
+        try:
+            headers = event.get("headers") or {}
+            user_id = headers.get("X-User-Id", "user_web_anonymous")
+
+            stream_publisher.send_activity_batch([{
+                "event_type": "product_view",
+                "user_id": user_id,
+                "product_id": product_id,
+                "session_id": f"sess_{request_id[:8]}"
+            }])
+        except Exception:
+            logger.exception("Falha não-bloqueante ao enviar evento de clickstream para o Firehose.")
 
         logger.info(f"Produto {product_id} localizado e recuperado com sucesso.")
         return create_success_response(200, product)

@@ -75,9 +75,10 @@ def dynamodb_service():
 # ==============================================================================
 # 🎯 SUÍTE DE TESTES DE INTEGRAÇÃO
 # ==============================================================================
+
 def test_repository_save_and_get_by_id(dynamodb_service):
     """
-    Valida a integração real de persistência e recuperação do DynamoDB.
+    Valida a integração real de persistência e recuperação do DynamoDB por Primary Key (id).
     """
     # ARRANGE
     repo = ProductsRepository()
@@ -98,6 +99,59 @@ def test_repository_save_and_get_by_id(dynamodb_service):
     assert retrieved is not None
     assert retrieved["title"] == "Elixir de Gato"
     assert retrieved["price"] == Decimal("120.00")
+
+
+def test_repository_get_by_id_not_found(dynamodb_service):
+    """
+    Valida se a busca por um ID inexistente retorna None sem lançar exceções.
+    """
+    # ARRANGE
+    repo = ProductsRepository()
+
+    # ACT
+    result = repo.get_by_id("non-existent-uuid-999")
+
+    # ASSERT
+    assert result is None
+
+
+def test_repository_find_by_category_gsi(dynamodb_service):
+    """
+    Valida fisicamente no container do DynamoDB a consulta por Categoria utilizando o GSI 'category-index'.
+    """
+    # ARRANGE
+    repo = ProductsRepository()
+    p1 = {
+        "id": "prod-cat-1",
+        "title": "Espada de Prata",
+        "category": "Weapons",
+        "price": Decimal("500.00")
+    }
+    p2 = {
+        "id": "prod-cat-2",
+        "title": "Espada de Aço",
+        "category": "Weapons",
+        "price": Decimal("350.00")
+    }
+    p3 = {
+        "id": "prod-cat-3",
+        "title": "Armadura de Couro",
+        "category": "Armor",
+        "price": Decimal("750.00")
+    }
+
+    repo.save(p1)
+    repo.save(p2)
+    repo.save(p3)
+
+    # ACT: Busca produtos da categoria 'Weapons' no GSI
+    weapons = repo.find_by_category("Weapons")
+
+    # ASSERT
+    assert len(weapons) == 2
+    titles = [item["title"] for item in weapons]
+    assert "Espada de Prata" in titles
+    assert "Espada de Aço" in titles
 
 
 def test_repository_update_dynamic_fields(dynamodb_service):
@@ -122,6 +176,7 @@ def test_repository_update_dynamic_fields(dynamodb_service):
     assert updated_fields["price"] == Decimal("199.99")
     # O campo description NÃO foi atualizado, mas deve continuar existindo intacto!
     assert updated_fields["description"] == "Permite enxergar no escuro completo."
+
 
 def test_repository_add_image_to_product(dynamodb_service):
     """

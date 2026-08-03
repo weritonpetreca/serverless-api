@@ -32,7 +32,7 @@ Conforme aplicações Serverless ganham complexidade e conectam-se a dependênci
 
 A aplicação foi reestruturada para incorporar padrões avançados de resiliência e configuração dinâmica:
 
-![AWS Serverless Product API Architecture v4](./architecture_v5.png)
+![AWS Serverless Product API Architecture v5](./architecture_v5.png)
 
 1. **Gerenciador de Parâmetros SSM (`shared/config_manager.py`):**
    A classe `SSMParameterManager` lê `/store/dev/config/` e mantém um cache em memória com TTL de 5 minutos. Fornece o método padronizado `.is_feature_enabled("feature_flag_image_processing")` (DRY Principle) para permitir desativações ao vivo pelo console da AWS.
