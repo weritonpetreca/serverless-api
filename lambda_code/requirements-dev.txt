@@ -1,11 +1,11 @@
-# Importa as dependências de produção
+# Importa as dependências de produção das Lambdas
 -r requirements.txt
 
-# SDK AWS e Stubs para Autocomplete na IDE
-boto3==1.43.50
-boto3-stubs[dynamodb]==1.43.50
+# SDK AWS e Stubs para Autocomplete na IDE (Versões Atualizadas)
+boto3>=1.35.0
+boto3-stubs[dynamodb]>=1.35.0
 
-# Ferramentas de Emulação e CLI AWS Local (Python)
+# Ferramentas de Emulação e CLI AWS Local
 localstack>=3.0.0
 awscli-local
 
@@ -13,8 +13,11 @@ awscli-local
 pytest==9.1.1
 pytest-mock==3.15.1
 moto[dynamodb,s3]>=5.0.0
-testcontainers[dynamodb]==4.14.2
+testcontainers==4.14.2
 docker==7.2.0
+
+# Dependência do Contêiner Fargate para Testes Unitários Locais
+flask==3.0.3
 
 # Utilitários de Ambiente
 python-dotenv==1.2.2

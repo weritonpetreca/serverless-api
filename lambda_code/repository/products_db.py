@@ -1,9 +1,9 @@
 import os
 import logging
+from typing import Dict, List, Optional, Any
 import boto3
 from botocore.exceptions import ClientError
-from typing import Dict, List, Optional
-from shared.error_handler import RetryableError
+from shared.error_handler import RetryableError, InsufficientStockError, ProductNotFoundError
 from shared.resilience import retry_with_backoff
 from shared.config_manager import SSMParameterManager
 from repository.cache_db import CacheRepository
@@ -32,7 +32,7 @@ class ProductsRepository:
 
     def _classify_and_raise_error(self, error: ClientError, context_message: str) -> None:
         """
-        Metodo privado utilitário para interceptar códigos AWS
+        Método privado utilitário para interceptar códigos AWS
         e decidir se a falha merece um Retry.
         """
         error_code = error.response["Error"]["Code"]
@@ -52,7 +52,7 @@ class ProductsRepository:
         raise error
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
-    def get_by_id(self, product_id: str) -> Optional[Dict]:
+    def get_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
         """
         [AP_01] Busca um produto utilizando a Chave Primária (id).
         Aplica o padrão Cache-Aside: consulta o ElastiCache antes de ir ao DynamoDB.
@@ -69,7 +69,6 @@ class ProductsRepository:
             item = response.get("Item")
 
             if item:
-                # Leitura dinâmica do TTL de cache do produto via SSM Parameter Store
                 raw_ttl = self.config.get_parameter("cache_ttl_product", default_value="3600")
                 try:
                     ttl_seconds = int(raw_ttl)
@@ -82,9 +81,10 @@ class ProductsRepository:
 
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao buscar produto {product_id} no DynamoDB")
+            return None
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
-    def save(self, product_data: Dict) -> None:
+    def save(self, product_data: Dict[str, Any]) -> None:
         """
         Insere um novo item na tabela do DynamoDB e invalida o cache do produto e da categoria.
         """
@@ -93,7 +93,6 @@ class ProductsRepository:
             logger.info(f"Gravando novo produto no DynamoDB com ID: {product_id}")
             self.table.put_item(Item=product_data)
 
-            # Invalidação explícita de cache
             if product_id:
                 self.cache.delete(f"product:{product_id}")
             category = product_data.get("category")
@@ -104,7 +103,7 @@ class ProductsRepository:
             self._classify_and_raise_error(e, "Erro ao persistir produto no DynamoDB")
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
-    def update(self, product_id: str, product_data: Dict) -> Optional[Dict]:
+    def update(self, product_id: str, product_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Atualiza campos específicos de um produto utilizando expressões de atualização do DynamoDB.
         Invalida as chaves de cache afetadas pela alteração.
@@ -138,7 +137,6 @@ class ProductsRepository:
 
             updated_attributes = response.get("Attributes")
 
-            # Invalidação explícita de cache
             self.cache.delete(f"product:{product_id}")
             category = product_data.get("category")
             if category:
@@ -148,9 +146,10 @@ class ProductsRepository:
 
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao atualizar produto {product_id} no DynamoDB")
+            return None
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
-    def find_by_category(self, category: str) -> List[Dict]:
+    def find_by_category(self, category: str) -> List[Dict[str, Any]]:
         """
         [AP_02] Realiza uma busca por Categoria com Cache-Aside e consulta ao GSI do DynamoDB.
         Lê o TTL de cache dinamicamente a partir do AWS SSM Parameter Store.
@@ -170,7 +169,6 @@ class ProductsRepository:
             )
             items = response.get("Items", [])
 
-            # Leitura dinâmica do TTL de cache de categoria via SSM Parameter Store
             raw_ttl = self.config.get_parameter("cache_ttl_category", default_value="1800")
             try:
                 ttl_seconds = int(raw_ttl)
@@ -183,9 +181,75 @@ class ProductsRepository:
 
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao buscar produtos da categoria {category} no GSI")
+            return []
 
     @retry_with_backoff(max_attempts=3, base_delay=0.2)
-    def add_image_to_product(self, product_id: str, image_url: str, metadata: Dict) -> Dict:
+    def reserve_stock(self, product_id: str, quantity: int) -> Dict[str, Any]:
+        """
+        Executa a reserva atômica de estoque no DynamoDB.
+        Garante que inventory_count >= quantity antes de decrementar (Zero Race Conditions).
+        Lança InsufficientStockError se o estoque for insuficiente.
+        """
+        try:
+            logger.info(f"Tentando reserva atômica de {quantity} unidade(s) do produto: {product_id}")
+            response = self.table.update_item(
+                Key={"id": product_id},
+                UpdateExpression="SET inventory_count = inventory_count - :qty",
+                ConditionExpression="attribute_exists(id) AND inventory_count >= :qty",
+                ExpressionAttributeValues={":qty": quantity},
+                ReturnValues="UPDATED_NEW"
+            )
+
+            updated_attributes = response.get("Attributes", {})
+            remaining_inventory = int(updated_attributes.get("inventory_count", 0))
+
+            self.cache.delete(f"product:{product_id}")
+
+            if remaining_inventory <= 3:
+                logger.warning(
+                    f"🚨 [LOW STOCK ALERT] Estoque crítico para o produto ID '{product_id}'! "
+                    f"Restante: {remaining_inventory} unidade(s)."
+                )
+
+            return {"success": True, "remaining_inventory": remaining_inventory}
+
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            if error_code == "ConditionalCheckFailedException":
+                product = self.get_by_id(product_id)
+                if not product:
+                    raise ProductNotFoundError(f"Produto ID '{product_id}' não encontrado no catálogo.")
+
+                curr_stock = int(product.get("inventory_count", 0))
+                raise InsufficientStockError(
+                    f"Estoque insuficiente para o produto '{product.get('title')}'. "
+                    f"Solicitado: {quantity}, Disponível em estoque: {curr_stock}"
+                )
+
+            self._classify_and_raise_error(e, f"Erro ao reservar estoque do produto {product_id} no DynamoDB")
+            return {"success": False, "remaining_inventory": 0}
+
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
+    def release_stock(self, product_id: str, quantity: int) -> None:
+        """
+        Executa o incremento atômico de estoque no DynamoDB para o Saga Pattern (Estorno Compensatório).
+        """
+        try:
+            logger.info(f"Devolvendo {quantity} unidade(s) ao estoque do produto: {product_id}")
+            self.table.update_item(
+                Key={"id": product_id},
+                UpdateExpression="SET inventory_count = inventory_count + :qty",
+                ConditionExpression="attribute_exists(id)",
+                ExpressionAttributeValues={":qty": quantity}
+            )
+            self.cache.delete(f"product:{product_id}")
+            logger.info(f"🔄 [SAGA ROLLBACK] Estoque devolvido (+{quantity}) para o produto ID: {product_id}")
+
+        except ClientError as e:
+            logger.exception(f"Falha não-bloqueante ao estornar estoque do produto ID: {product_id}")
+
+    @retry_with_backoff(max_attempts=3, base_delay=0.2)
+    def add_image_to_product(self, product_id: str, image_url: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Associa a URL e os metadados de uma imagem ao produto no DynamoDB e invalida o cache.
         """
@@ -212,10 +276,10 @@ class ProductsRepository:
 
             updated_attributes = response.get("Attributes", {})
 
-            # Invalidação explícita de cache do produto
             self.cache.delete(f"product:{product_id}")
 
             return updated_attributes
 
         except ClientError as e:
             self._classify_and_raise_error(e, f"Erro ao anexar metadados da imagem ao produto {product_id} no DynamoDB")
+            return {}

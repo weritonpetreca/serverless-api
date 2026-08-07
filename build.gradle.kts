@@ -35,7 +35,7 @@ tasks.test {
 tasks.register<Exec>("installPythonVendorDeps") {
     group = "build"
     description = "Instala dependências do requirements.txt na pasta lambda_code/vendor"
-    commandLine("pip", "install", "-r", "lambda_code/requirements.txt", "-t", "lambda_code/vendor", "--quiet")
+    commandLine("pip", "install", "-r", "lambda_code/requirements.txt", "-t", "lambda_code/vendor", "--upgrade", "--quiet")
 }
 
 // Garante que o ./gradlew build execute o installPythonVendorDeps automaticamente

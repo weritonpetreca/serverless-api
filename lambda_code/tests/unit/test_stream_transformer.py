@@ -3,6 +3,7 @@ import base64
 import pytest
 from handlers.stream_transformer import handler
 
+
 def _create_firehose_record(record_id: str, payload_dict: dict) -> dict:
     json_bytes = json.dumps(payload_dict).encode("utf-8")
     b64_data = base64.b64encode(json_bytes).decode("utf-8")
@@ -15,8 +16,15 @@ def _create_firehose_record(record_id: str, payload_dict: dict) -> dict:
 def test_stream_transformer_enrichment_success(mocker):
     """Testa se a Lambda decodifica Base64, enriquece o produto no DynamoDB e retorna Ok com \\n."""
     mocker.patch(
-        "handlers.stream_transformer.repository.get_by_id",
-        return_value={"id": "prod_100", "title": "Teclado Mecânico RGB", "category": "Computers", "price": 350.00}
+        "handlers.stream_transformer.repository.table.get_item",
+        return_value={
+            "Item": {
+                "id": "prod_100",
+                "title": "Teclado Mecânico RGB",
+                "category": "Computers",
+                "price": 350.00
+            }
+        }
     )
 
     event_payload = {

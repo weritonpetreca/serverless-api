@@ -34,7 +34,8 @@ def _transform_single_record(
     if event_type == "product_view" and product_id:
         try:
             if product_id not in local_product_cache:
-                local_product_cache[product_id] = repository.get_by_id(product_id)
+                response = repository.table.get_item(Key={"id": product_id})
+                local_product_cache[product_id] = response.get("Item")
 
             product = local_product_cache[product_id]
             if product:

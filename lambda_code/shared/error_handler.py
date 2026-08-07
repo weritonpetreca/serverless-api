@@ -38,6 +38,9 @@ class OrderProcessingException(Exception):
     """Exceção lançada quando o processador assíncrono SQS falha no processamento do pedido."""
     pass
 
+class InsufficientStockError(ValidationError):
+    """Exceção lançada quando o estoque do produto é menor que a quantidade solicitada."""
+    pass
 
 class ErrorClassifier:
     """

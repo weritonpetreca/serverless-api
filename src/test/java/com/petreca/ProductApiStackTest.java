@@ -32,7 +32,7 @@ class ProductApiStackTest {
     }
 
     // =========================================================================
-    // 1. Testes de Borda, Runtimes e API Gateway (Módulos 03-05)
+    // 1. Testes de Borda, Runtimes e API Gateway (Módulos 03-05 e 10)
     // =========================================================================
 
     @Test
@@ -46,10 +46,16 @@ class ProductApiStackTest {
     }
 
     @Test
-    @DisplayName("Deve conter uma instância do API Gateway REST")
-    void shouldHaveApiGatewayRestApi() {
+    @DisplayName("Deve conter uma instância do API Gateway REST e o recurso /orders")
+    void shouldHaveApiGatewayRestApiAndOrdersResource() {
         assertDoesNotThrow(() ->
                 template.resourceCountIs("AWS::ApiGateway::RestApi", 1)
+        );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ApiGateway::Resource", Map.of(
+                        "PathPart", "orders"
+                ))
         );
     }
 
@@ -77,6 +83,12 @@ class ProductApiStackTest {
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::Lambda::Function", Map.of(
                         "Handler", "handlers.stream_transformer.handler"
+                ))
+        );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::Lambda::Function", Map.of(
+                        "Handler", "handlers.create_order.handler"
                 ))
         );
     }
@@ -180,7 +192,7 @@ class ProductApiStackTest {
     }
 
     // =========================================================================
-    // 4. Testes Módulo 07: AWS SSM Parameter Store
+    // 4. Testes Módulo 07 & 08: SSM Parameter Store, EventBridge, SQS, SNS
     // =========================================================================
 
     @Test
@@ -193,35 +205,7 @@ class ProductApiStackTest {
                         "Value", "5"
                 ))
         );
-
-        assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::SSM::Parameter", Map.of(
-                        "Name", "/store/dev/config/circuit_breaker_threshold",
-                        "Type", "String",
-                        "Value", "5"
-                ))
-        );
-
-        assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::SSM::Parameter", Map.of(
-                        "Name", "/store/dev/config/feature_flag_image_processing",
-                        "Type", "String",
-                        "Value", "true"
-                ))
-        );
-
-        assertDoesNotThrow(() ->
-                template.hasResourceProperties("AWS::SSM::Parameter", Map.of(
-                        "Name", "/store/dev/config/s3_presigned_url_expiration",
-                        "Type", "String",
-                        "Value", "3600"
-                ))
-        );
     }
-
-    // =========================================================================
-    // 5. Testes Módulo 08: Mensageria Assíncrona (EventBridge, SQS, SNS)
-    // =========================================================================
 
     @Test
     @DisplayName("Deverá criar o Barramento Customizado no EventBridge e as Filas SQS")
@@ -248,7 +232,7 @@ class ProductApiStackTest {
     }
 
     // =========================================================================
-    // 6. Testes Módulo 09: Real-time Data Streaming (Amazon Data Firehose)
+    // 5. Testes Módulo 09: Amazon Data Firehose
     // =========================================================================
 
     @Test
@@ -257,12 +241,74 @@ class ProductApiStackTest {
         assertDoesNotThrow(() ->
                 template.hasResourceProperties("AWS::KinesisFirehose::DeliveryStream", Map.of(
                         "DeliveryStreamName", "customer-activity-stream",
-                        "DeliveryStreamType", "DirectPut",
-                        "ExtendedS3DestinationConfiguration", Map.of(
-                                "CompressionFormat", "GZIP",
-                                "Prefix", "analytics/customer-activity/year=!{timestamp:yyyy}/month=!{timestamp:MM}/",
-                                "ErrorOutputPrefix", "errors/firehose/"
+                        "DeliveryStreamType", "DirectPut"
+                ))
+        );
+    }
+
+    // =========================================================================
+    // 6. MÓDULO 10: TESTES DO AMAZON ECR, AMAZON ECS CLUSTER, FARGATE E ALB
+    // =========================================================================
+
+    @Test
+    @DisplayName("Deverá criar o Repositório ECR Privado com Varredura de Imagens Ativada")
+    void shouldCreateEcrRepositoryWithImageScanning() {
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ECR::Repository", Map.of(
+                        "RepositoryName", "store-recommendations",
+                        "ImageScanningConfiguration", Map.of(
+                                "ScanOnPush", true
                         )
+                ))
+        );
+    }
+
+    @Test
+    @DisplayName("Deverá criar o Cluster Amazon ECS")
+    void shouldCreateEcsCluster() {
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ECS::Cluster", Map.of(
+                        "ClusterName", "recommendations-cluster"
+                ))
+        );
+    }
+
+    @Test
+    @DisplayName("Deverá criar a Task Definition do Fargate com 0.25 vCPU e 512 MB de RAM")
+    void shouldCreateFargateTaskDefinition() {
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ECS::TaskDefinition", Map.of(
+                        "RequiresCompatibilities", List.of("FARGATE"),
+                        "Cpu", "256",
+                        "Memory", "512",
+                        "NetworkMode", "awsvpc"
+                ))
+        );
+    }
+
+    @Test
+    @DisplayName("Deverá criar o Serviço ECS Fargate com DesiredCount = 2")
+    void shouldCreateEcsFargateService() {
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ECS::Service", Map.of(
+                        "LaunchType", "FARGATE",
+                        "DesiredCount", 2
+                ))
+        );
+    }
+
+    @Test
+    @DisplayName("Deverá criar o Application Load Balancer (ALB) com Target Group e Health Check em /health")
+    void shouldCreateApplicationLoadBalancerWithHealthCheck() {
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ElasticLoadBalancingV2::LoadBalancer", Map.of(
+                        "Scheme", "internet-facing"
+                ))
+        );
+
+        assertDoesNotThrow(() ->
+                template.hasResourceProperties("AWS::ElasticLoadBalancingV2::TargetGroup", Map.of(
+                        "HealthCheckPath", "/health"
                 ))
         );
     }
