@@ -11,24 +11,20 @@ def mock_repo(mocker):
 
 
 @pytest.fixture(autouse=True)
-def mock_ssm_and_publisher(mocker):
+def mock_ssm(mocker):
     """
-    Fixture automática (autouse=True) que simula o SSM Feature Flag como ATIVO
-    e o EventPublisher ativado para todos os testes desta classe.
+    Fixture automática (autouse=True) que simula o SSM Feature Flag como ATIVO.
     """
-    mock_ssm = mocker.patch("handlers.insert_product.config_manager")
-    mock_ssm.is_feature_enabled.return_value = True
-
-    mock_pub = mocker.patch("handlers.insert_product.event_publisher")
-    mock_pub.publish_order_placed.return_value = "evt_test_123"
-    return {"ssm": mock_ssm, "publisher": mock_pub}
+    mock_ssm_instance = mocker.patch("handlers.insert_product.config_manager")
+    mock_ssm_instance.is_feature_enabled.return_value = True
+    return mock_ssm_instance
 
 
 class TestInsertProductHandler:
 
     def test_insert_product_success(self, mock_repo, mock_context):
         """
-        Testa o cenário de sucesso na criação de um produto.
+        Testa o cenário de sucesso na criação de um produto no catálogo.
         Verifica se o status 201 é retornado, se um ID (UUID) foi gerado
         e se o método de persistência do repositório foi chamado.
         """
@@ -54,8 +50,8 @@ class TestInsertProductHandler:
         Cenário: Tentativa de cadastro quando a Feature Flag no SSM está desativada.
         Esperado: Retorno HTTP 400 avisando sobre manutenção.
         """
-        mock_ssm = mocker.patch("handlers.insert_product.config_manager")
-        mock_ssm.is_feature_enabled.return_value = False
+        mock_ssm_instance = mocker.patch("handlers.insert_product.config_manager")
+        mock_ssm_instance.is_feature_enabled.return_value = False
 
         mock_event = APIGatewayEventFactory.create_post_event({
             "title": "Espada de Prata",
@@ -164,23 +160,3 @@ class TestInsertProductHandler:
         assert "Formato JSON inválido" in body["error"]["message"]
         assert body["error"]["request_id"] == "req-insert-400-syntax"
         mock_repo.save.assert_not_called()
-
-    def test_insert_product_success_even_if_event_publisher_fails(self, mock_repo, mock_context, mocker):
-        """
-        Cenário: Testa que se o EventBridge falhar, o produto AINDA É SALVO com sucesso no DynamoDB (Non-blocking).
-        """
-        mock_publisher = mocker.patch("handlers.insert_product.event_publisher")
-        mock_publisher.publish_order_placed.side_effect = RuntimeError("EventBridge Throttled")
-
-        mock_event = APIGatewayEventFactory.create_post_event({
-            "title": "Armadura da Escola do Gato",
-            "category": "Home",
-            "description": "Armadura leve de couro batido.",
-            "price": 800.00
-        })
-
-        response = handler(mock_event, mock_context)
-
-        # O produto é salvo no DynamoDB com sucesso (HTTP 201) apesar da falha do EventBridge
-        assert response["statusCode"] == 201
-        mock_repo.save.assert_called_once()

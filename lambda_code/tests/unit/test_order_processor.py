@@ -47,7 +47,7 @@ def mock_stream_publisher(mocker):
 def test_order_processor_success(sample_sqs_event, mocker, mock_stream_publisher):
     """Cenário 1: Sucesso completo nas 3 etapas + notificação SNS + envio ao Firehose."""
     mocker.patch("handlers.order_processor.sns_client.publish", return_value={"MessageId": "sns_msg_123"})
-    mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
+    mocker.patch("handlers.order_processor.repository.reserve_stock", return_value={"success": True, "remaining_inventory": 9})
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
     mock_ssm.is_feature_enabled.return_value = True
@@ -74,7 +74,7 @@ def test_order_processor_disabled_by_feature_flag(sample_sqs_event, mocker):
 
 def test_order_processor_triggers_rollback_when_product_not_found(sample_sqs_event, mocker):
     """Cenário 3: Produto não encontrado no DynamoDB dispara estorno compensatório."""
-    mocker.patch("handlers.order_processor.repository.get_by_id", return_value=None)
+    mocker.patch("handlers.order_processor.repository.reserve_stock", side_effect=RuntimeError("Produto não encontrado"))
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
     mock_ssm.is_feature_enabled.return_value = True
@@ -89,7 +89,7 @@ def test_order_processor_triggers_rollback_when_product_not_found(sample_sqs_eve
 
 def test_order_processor_triggers_rollback_when_payment_fails(sample_sqs_event, mocker):
     """Cenário 4: Falha no pagamento após validação de estoque libera a reserva."""
-    mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
+    mocker.patch("handlers.order_processor.repository.reserve_stock", return_value={"success": True, "remaining_inventory": 9})
     mocker.patch("handlers.order_processor._process_payment_step", side_effect=RuntimeError("Cartão recusado"))
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
@@ -124,7 +124,7 @@ def test_order_processor_handles_malformed_json_payload(mocker):
 def test_order_processor_handles_sns_publish_error_gracefully(sample_sqs_event, mocker):
     """Cenário 6: Falha no SNS registra log de exceção sem derrubar o pedido se concluído."""
     mocker.patch("handlers.order_processor.sns_client.publish", side_effect=RuntimeError("SNS throttled"))
-    mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
+    mocker.patch("handlers.order_processor.repository.reserve_stock", return_value={"success": True, "remaining_inventory": 9})
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
     mock_ssm.is_feature_enabled.return_value = True
@@ -139,7 +139,7 @@ def test_order_processor_handles_sns_publish_error_gracefully(sample_sqs_event, 
 def test_order_processor_handles_stream_publisher_error_gracefully(sample_sqs_event, mocker):
     """Cenário 7: Falha no Firehose registra log de exceção sem derrubar o pedido se concluído."""
     mocker.patch("handlers.order_processor.sns_client.publish", return_value={"MessageId": "sns_msg_123"})
-    mocker.patch("handlers.order_processor.repository.get_by_id", return_value={"id": "prod_1", "title": "Teclado RGB"})
+    mocker.patch("handlers.order_processor.repository.reserve_stock", return_value={"success": True, "remaining_inventory": 9})
 
     mock_ssm = mocker.patch("handlers.order_processor.config_manager")
     mock_ssm.is_feature_enabled.return_value = True

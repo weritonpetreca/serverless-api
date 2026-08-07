@@ -4,7 +4,6 @@ import uuid
 from pydantic import ValidationError as PydanticValidationError
 from shared.error_handler import ErrorClassifier, ValidationError as DomainValidationError
 from shared.config_manager import SSMParameterManager
-from shared.event_publisher import EventPublisher
 from shared.response_utils import create_success_response
 from repository.products_db import ProductsRepository
 from domain.product_schema import ProductInput
@@ -15,28 +14,19 @@ logger.setLevel(logging.INFO)
 # Inicialização dos objetos no escopo global para reaproveitamento em Warm Starts
 repository = ProductsRepository()
 config_manager = SSMParameterManager(ttl_seconds=300)
-event_publisher = EventPublisher()
 
 
 def handler(event, context):
     """
-    Handler da AWS Lambda responsável pela criação de novos produtos.
-
-    Fluxo:
-      1. Verifica Feature Flag no SSM Parameter Store para autorizar novos cadastros.
-      2. Extrai o corpo da requisição HTTP (JSON).
-      3. Valida o payload contra o schema do Pydantic v2.
-      4. Se inválido, retorna 400 (Bad Request) com detalhes claros do erro.
-      5. Se válido, injeta um ID seguro (UUID v4) e persiste no DynamoDB.
-      6. Retorna 201 (Created) com os dados do produto salvo.
+    Handler da AWS Lambda responsável pelo cadastro de novos produtos no catálogo (POST /products).
     """
-    logger.info(f"Iniciando processamento da requisição de cadastro de produto. Evento: {json.dumps(event)}")
+    logger.info(f"Iniciando cadastro de novo produto. Evento: {json.dumps(event)}")
     request_id = context.aws_request_id if context else "fallback-local-id"
 
     try:
-        # 1. Validação de Feature Flag via AWS SSM Parameter Store (Dynamic Control)
-        if not config_manager.is_feature_enabled("feature_flag_image_processing"):
-            logger.warning("Tentativa de cadastro rejeitada: Operações do catálogo desativadas via SSM Feature Flag.")
+        # Checagem de Feature Flag de manutenção no SSM
+        if not config_manager.is_feature_enabled("feature_flag_order_processing"):
+            logger.warning("Tentativa de cadastro rejeitada: Catálogo em manutenção via SSM Feature Flag.")
             raise DomainValidationError("Cadastros no catálogo estão temporariamente desativados para manutenção.")
 
         body_str = event.get("body")
@@ -45,42 +35,24 @@ def handler(event, context):
 
         body_json = json.loads(body_str)
 
+        # Validação do produto com Pydantic v2
         validated_product = ProductInput.model_validate(body_json)
 
         product_to_save = validated_product.model_dump()
         product_to_save["id"] = str(uuid.uuid4())
 
+        # Persistência síncrona no DynamoDB
         repository.save(product_to_save)
 
-        try:
-            order_detail = {
-                "order_id": f"ord_{product_to_save['id'][:8]}",
-                "customer_id": "cust_catalog_admin",
-                "customer_email": "admin@ecommerce.com",
-                "customer_tier": "vip",
-                "order_type": "express",
-                "total_amount": float(product_to_save.get("price", 0.0)),
-                "items": [
-                    {
-                        "product_id": product_to_save["id"],
-                        "quantity": 1,
-                        "price": float(product_to_save.get("price", 0.0))
-                    }
-                ]
-            }
-            event_publisher.publish_order_placed(order_detail)
-        except Exception:
-            logger.exception("Falha não-bloqueante ao publicar evento no EventBridge. O produto foi salvo no DynamoDB.")
-
-        logger.info(f"Produto persistido com sucesso! ID gerado: {product_to_save['id']}")
+        logger.info(f"Produto cadastrado com sucesso no catálogo! ID gerado: {product_to_save['id']}")
         return create_success_response(201, product_to_save)
 
     except PydanticValidationError as e:
-        logger.warning(f"Falha na validação dos dados de entrada (Pydantic): {e.errors()}")
+        logger.warning(f"Falha na validação do produto (Pydantic): {e.errors()}")
         return ErrorClassifier.handle_exception(e, request_id)
 
     except json.JSONDecodeError:
-        logger.warning("Falha ao deserializar o corpo da requisição: JSON inválido de sintaxe.")
+        logger.warning("Falha ao deserializar o corpo da requisição: JSON inválido.")
         custom_error = DomainValidationError("Formato JSON inválido no corpo da requisição.")
         return ErrorClassifier.handle_exception(custom_error, request_id)
 
@@ -89,5 +61,5 @@ def handler(event, context):
         return ErrorClassifier.handle_exception(e, request_id)
 
     except Exception as e:
-        logger.exception("Erro inesperado e não tratado durante a execução da Lambda.")
+        logger.exception("Erro inesperado durante o cadastro de produto.")
         return ErrorClassifier.handle_exception(e, request_id)

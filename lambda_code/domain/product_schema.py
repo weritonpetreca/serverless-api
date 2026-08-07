@@ -43,6 +43,11 @@ class ProductInput(BaseModel):
         decimal_places=2,
         description="Preço unitário em Decimal para precisão em cálculos financeiros."
     )
+    inventory_count: int = Field(
+        default=0,
+        ge=0,
+        description="Quantidade disponível em estoque"
+    )
 
     @field_validator('price')
     @classmethod

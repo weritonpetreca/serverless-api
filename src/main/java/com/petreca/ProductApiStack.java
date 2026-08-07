@@ -7,8 +7,15 @@ import software.amazon.awscdk.services.apigateway.LambdaIntegration;
 import software.amazon.awscdk.services.apigateway.RestApi;
 import software.amazon.awscdk.services.dynamodb.*;
 import software.amazon.awscdk.services.ec2.*;
+import software.amazon.awscdk.services.ecr.Repository;
+import software.amazon.awscdk.services.ecr.TagMutability;
+import software.amazon.awscdk.services.ecr.assets.DockerImageAsset;
+import software.amazon.awscdk.services.ecs.*;
+import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
+import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedTaskImageOptions;
 import software.amazon.awscdk.services.elasticache.CfnCacheCluster;
 import software.amazon.awscdk.services.elasticache.CfnSubnetGroup;
+import software.amazon.awscdk.services.elasticloadbalancingv2.HealthCheck;
 import software.amazon.awscdk.services.events.EventBus;
 import software.amazon.awscdk.services.events.EventPattern;
 import software.amazon.awscdk.services.events.Rule;
@@ -216,7 +223,6 @@ public class ProductApiStack extends Stack {
                 "FIREHOSE_STREAM_NAME", FIREHOSE_STREAM_NAME
         );
 
-        // 5.1. Stream Transformer Lambda (Timeout de 30s)
         final Function streamTransformerFn = createPythonLambda(
                 "StreamTransformer",
                 "handlers.stream_transformer.handler",
@@ -225,7 +231,6 @@ public class ProductApiStack extends Stack {
                 LambdaConfig.of(false, null, commonEnvVars, Duration.seconds(30))
         );
 
-        // 5.2. Log Group no CloudWatch para Erros Nativa do Firehose
         final LogGroup firehoseLogGroup = LogGroup.Builder.create(this, "FirehoseLogGroup")
                 .logGroupName("/aws/kinesisfirehose/" + FIREHOSE_STREAM_NAME)
                 .retention(RetentionDays.ONE_MONTH)
@@ -278,13 +283,14 @@ public class ProductApiStack extends Stack {
                         .build())
                 .build();
 
-        // 6. Instanciação das Lambdas Principais com LambdaConfig
+        // 6. Instanciação das Lambdas Principais
         final Function queryProducts = createPythonLambda("QueryProducts", "handlers.query_products.handler", productsTable, dependencyLayer, LambdaConfig.of(false, networkConfig, commonEnvVars));
         queryProducts.addEnvironment("CATEGORY_GSI_NAME", CATEGORY_GSI_NAME);
 
         final Function getProduct = createPythonLambda("GetProduct", "handlers.get_product.handler", productsTable, dependencyLayer, LambdaConfig.of(false, networkConfig, commonEnvVars));
         final Function insertProduct = createPythonLambda("InsertProduct", "handlers.insert_product.handler", productsTable, dependencyLayer, LambdaConfig.of(true, networkConfig, commonEnvVars));
         final Function updateProduct = createPythonLambda("UpdateProduct", "handlers.update_product.handler", productsTable, dependencyLayer, LambdaConfig.of(true, networkConfig, commonEnvVars));
+        final Function createOrder = createPythonLambda("CreateOrder", "handlers.create_order.handler", productsTable, dependencyLayer, LambdaConfig.of(true, networkConfig, commonEnvVars));
 
         final Function generateUploadUrl = createPythonLambda("GenerateUploadUrl", "handlers.generate_upload_url.handler", productsTable, dependencyLayer, LambdaConfig.of(false, null, commonEnvVars));
         assetsBucket.grantReadWrite(generateUploadUrl);
@@ -300,9 +306,72 @@ public class ProductApiStack extends Stack {
         final Function orderProcessorWorker = createPythonLambda("OrderProcessorWorker", "handlers.order_processor.handler", productsTable, dependencyLayer, LambdaConfig.of(true, networkConfig, commonEnvVars, Duration.seconds(300)));
         orderProcessorWorker.addEventSource(SqsEventSource.Builder.create(orderQueue).batchSize(10).maxBatchingWindow(Duration.seconds(5)).build());
 
+        // =========================================================================
+        // 10. MÓDULO 10: AMAZON ECR & AMAZON ECS FARGATE COM APPLICATION LOAD BALANCER
+        // =========================================================================
+
+        // 10.1. Repositório ECR Privado com Varredura e Ciclo de Vida FinOps
+        final Repository ecrRepository = Repository.Builder.create(this, "RecommendationEcrRepository")
+                .repositoryName("store-recommendations")
+                .imageScanOnPush(true) // DevSecOps: Varredura automática de vulnerabilidades
+                .imageTagMutability(TagMutability.MUTABLE)
+                .removalPolicy(RemovalPolicy.DESTROY)
+                .build();
+
+        ecrRepository.addLifecycleRule(software.amazon.awscdk.services.ecr.LifecycleRule.builder()
+                .description("Mantém apenas as 10 imagens mais recentes para otimização FinOps")
+                .maxImageCount(10)
+                .build());
+
+        // Compilação do Ativo Docker Local
+        final DockerImageAsset dockerImageAsset = DockerImageAsset.Builder.create(this, "RecommendationDockerImage")
+                .directory("container_code")
+                .build();
+
+        // 10.2. Amazon ECS Cluster
+        final Cluster ecsCluster = Cluster.Builder.create(this, "RecommendationEcsCluster")
+                .clusterName("recommendations-cluster")
+                .vpc(vpc)
+                .build();
+
+        // 10.3. Serviço Fargate com Application Load Balancer (ALB)
+        final ApplicationLoadBalancedFargateService fargateService = ApplicationLoadBalancedFargateService.Builder.create(this, "RecommendationFargateService")
+                .cluster(ecsCluster)
+                .serviceName("recommendation-service")
+                .cpu(256)            // 0.25 vCPU
+                .memoryLimitMiB(512) // 512 MB RAM
+                .desiredCount(2)     // Alta Disponibilidade em 2 Zonas de Disponibilidade
+                .publicLoadBalancer(true)
+                .taskImageOptions(ApplicationLoadBalancedTaskImageOptions.builder()
+                        .image(ContainerImage.fromDockerImageAsset(dockerImageAsset)) // 👈 Ativo Docker Conectado
+                        .command(List.of("python", "recommendation_service.py"))
+                        .containerPort(8000)
+                        .environment(Map.of(
+                                TABLE_NAME_ENV, productsTable.getTableName(),
+                                "ANALYTICS_BUCKET_NAME", analyticsBucket.getBucketName(),
+                                "CATEGORY_GSI_NAME", CATEGORY_GSI_NAME,
+                                "AWS_REGION", this.getRegion()
+                        ))
+                        .logDriver(LogDriver.awsLogs(AwsLogDriverProps.builder()
+                                .streamPrefix("recommendations")
+                                .build()))
+                        .build())
+                .build();
+
+        fargateService.getTargetGroup().configureHealthCheck(HealthCheck.builder()
+                .path("/health")
+                .port("8000")
+                .healthyHttpCodes("200")
+                .build());
+
+        // Concede permissões IAM no DynamoDB e no Bucket Analítico do S3 para a Task Role do Contêiner
+        productsTable.grantReadData(fargateService.getTaskDefinition().getTaskRole());
+        analyticsBucket.grantRead(fargateService.getTaskDefinition().getTaskRole());
+
         // 7. Permissões IAM
         storeEventBus.grantPutEventsTo(insertProduct);
         storeEventBus.grantPutEventsTo(updateProduct);
+        storeEventBus.grantPutEventsTo(createOrder);
         customerNotificationTopic.grantPublish(orderProcessorWorker);
 
         final PolicyStatement firehosePutPolicy = PolicyStatement.Builder.create()
@@ -313,6 +382,7 @@ public class ProductApiStack extends Stack {
         insertProduct.addToRolePolicy(firehosePutPolicy);
         updateProduct.addToRolePolicy(firehosePutPolicy);
         getProduct.addToRolePolicy(firehosePutPolicy);
+        createOrder.addToRolePolicy(firehosePutPolicy);
         orderProcessorWorker.addToRolePolicy(firehosePutPolicy);
 
         // 8. SSM Parameter Store
@@ -324,7 +394,7 @@ public class ProductApiStack extends Stack {
         final StringParameter cacheTtlProductParam = StringParameter.Builder.create(this, "CacheTtlProductParam").parameterName(ssmPrefixPath + "/cache_ttl_product").stringValue("3600").build();
         final StringParameter cacheTtlCategoryParam = StringParameter.Builder.create(this, "CacheTtlCategoryParam").parameterName(ssmPrefixPath + "/cache_ttl_category").stringValue("1800").build();
 
-        final List<Function> allFunctions = List.of(queryProducts, getProduct, insertProduct, updateProduct, generateUploadUrl, processImageMetadata, orderProcessorWorker, streamTransformerFn);
+        final List<Function> allFunctions = List.of(queryProducts, getProduct, insertProduct, updateProduct, createOrder, generateUploadUrl, processImageMetadata, orderProcessorWorker, streamTransformerFn);
 
         for (Function fn : allFunctions) {
             apiTimeoutParam.grantRead(fn);
@@ -357,13 +427,13 @@ public class ProductApiStack extends Stack {
         productByIdResource.addMethod("GET", new LambdaIntegration(getProduct));
         productByIdResource.addMethod("PATCH", new LambdaIntegration(updateProduct));
 
+        final IResource ordersResource = api.getRoot().addResource("orders");
+        ordersResource.addMethod("POST", new LambdaIntegration(createOrder));
+
         final IResource uploadUrlResource = productByIdResource.addResource("upload-url");
         uploadUrlResource.addMethod("POST", new LambdaIntegration(generateUploadUrl));
     }
 
-    // =========================================================================
-    // Método Auxiliar createPythonLambda (Máximo de 5 parâmetros - SonarQube OK)
-    // =========================================================================
     private Function createPythonLambda(
             final String id,
             final String handler,

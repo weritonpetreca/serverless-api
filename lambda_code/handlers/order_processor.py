@@ -22,17 +22,18 @@ stream_publisher = StreamPublisher()
 
 def _validate_and_reserve_inventory_step(order_data: OrderPlacedEventDetail) -> Dict[str, Any]:
     """
-    Etapa 1 REAL: Consulta a existência de cada produto no DynamoDB via ProductsRepository.
+    Etapa 1 REAL: Reserva atômica de estoque no DynamoDB.
+    Se o estoque for insuficiente, lança InsufficientStockError e cancela a ordem.
     """
-    logger.info(f"[Passo 1/3] Validando catálogo/estoque no DynamoDB para o pedido {order_data.order_id}")
+    logger.info(f"[Passo 1/3] Efetuando reserva atômica de estoque para o pedido {order_data.order_id}")
+    reserved_items = []
 
     for item in order_data.items:
-        product = repository.get_by_id(item.product_id)
-        if not product:
-            logger.warning(f"Produto ID '{item.product_id}' não localizado no DynamoDB.")
-            raise ProductNotFoundError(f"Item {item.product_id} não encontrado para reserva de estoque.")
+        res = repository.reserve_stock(item.product_id, item.quantity)
+        reserved_items.append({"product_id": item.product_id, "quantity": item.quantity})
+        logger.info(f"  ✅ Estoque reservado para produto ID '{item.product_id}'. Restante em estoque: {res['remaining_inventory']}")
 
-    return {"success": True, "validated_items_count": len(order_data.items)}
+    return {"success": True, "reserved_items": reserved_items}
 
 
 def _process_payment_step(order_data: OrderPlacedEventDetail) -> Dict[str, Any]:
@@ -61,7 +62,9 @@ def _rollback_completed_steps(completed_steps: List[Dict[str, Any]], order_id: s
                 tx_id = step.get("result", {}).get("transaction_id")
                 logger.info(f"[ROLLBACK] Estornando cobrança de pagamento ID: {tx_id}")
             elif step_name == "validate_inventory":
-                logger.info(f"[ROLLBACK] Liberando reserva de estoque para o pedido: {order_id}")
+                reserved_items = step.get("result", {}).get("reserved_items", [])
+                for item in reserved_items:
+                    repository.release_stock(item["product_id"], item["quantity"])
         except Exception:
             logger.exception(f"Falha ao executar estorno da etapa {step_name}.")
 
